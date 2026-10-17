@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -42,49 +43,59 @@ public class InventoryService {
 
     /**
      * Saga step 2-3: OrderCreated -> try to reserve every line (BR-01, BR-02).
-     * All-or-nothing: one missing line fails the whole reservation.
+     * All-or-nothing and all in ONE transaction: the check pass runs first, so
+     * a failed line changes nothing and the StockReservationFailed event is a
+     * normal business outcome, not an exception. If two orders race for the
+     * last item, @Version on stock makes the loser's commit fail; the whole
+     * transaction (including the processed_events mark) rolls back and the
+     * Kafka retry sees fresh stock.
      */
     @Transactional
     public void reserveForOrder(String orderId, List<OrderLine> lines) {
-        try {
-            for (OrderLine line : lines) {
-                Stock stock = stockRepository.findById(line.productId())
-                        .orElseThrow(() -> new IllegalStateException("No stock row for product " + line.productId()));
-                stock.reserve(line.quantity()); // throws if not enough
-                reservationRepository.save(new Reservation(
-                        orderId, line.productId(), line.quantity(), Instant.now().plus(reservationTtl)));
+        if (!reservationRepository.findByOrderId(orderId).isEmpty()) {
+            return; // redelivery after a crash: this order was already handled
+        }
+
+        // pass 1: check every line before touching anything
+        Map<Long, Stock> stocks = new LinkedHashMap<>();
+        for (OrderLine line : lines) {
+            Stock stock = stockRepository.findById(line.productId()).orElse(null);
+            if (stock == null || !stock.canReserve(line.quantity())) {
+                log.info("Reservation failed for order {}: not enough stock for product {}",
+                        orderId, line.productId());
+                outbox.append(EventTypes.TOPIC_INVENTORY_EVENTS, orderId,
+                        EventTypes.STOCK_RESERVATION_FAILED,
+                        Map.of("reason", "Not enough stock for product " + line.productId()));
+                return;
             }
-            outbox.append(EventTypes.TOPIC_INVENTORY_EVENTS, orderId, EventTypes.STOCK_RESERVED, Map.of());
-        } catch (IllegalStateException notEnough) {
-            log.info("Reservation failed for order {}: {}", orderId, notEnough.getMessage());
-            // the @Transactional rollback undoes partial reserves; we still must
-            // tell order-service, so throw a marker the listener converts
-            throw new ReservationFailedException(orderId, notEnough.getMessage());
+            stocks.put(line.productId(), stock);
         }
-    }
 
-    public static class ReservationFailedException extends RuntimeException {
-        public final String orderId;
-        public ReservationFailedException(String orderId, String message) {
-            super(message);
-            this.orderId = orderId;
+        // pass 2: everything fits, reserve it all
+        for (OrderLine line : lines) {
+            stocks.get(line.productId()).reserve(line.quantity());
+            reservationRepository.save(new Reservation(
+                    orderId, line.productId(), line.quantity(), Instant.now().plus(reservationTtl)));
         }
+        outbox.append(EventTypes.TOPIC_INVENTORY_EVENTS, orderId, EventTypes.STOCK_RESERVED, Map.of());
     }
 
-    /** Written in its own transaction after the reserve transaction rolled back. */
-    @Transactional
-    public void publishReservationFailed(String orderId, String reason) {
-        outbox.append(EventTypes.TOPIC_INVENTORY_EVENTS, orderId,
-                EventTypes.STOCK_RESERVATION_FAILED, Map.of("reason", reason));
-    }
-
-    /** Saga compensation: OrderCancelled -> give the stock back (BR-02). */
+    /**
+     * Saga compensation: OrderCancelled -> give the stock back (BR-02).
+     * A RESERVED line moves reserved -> available. A CONFIRMED line (the order
+     * was paid, then refunded) was already sold, so the quantity goes straight
+     * back to available.
+     */
     @Transactional
     public void releaseForOrder(String orderId) {
         for (Reservation reservation : reservationRepository.findByOrderId(orderId)) {
             if (reservation.isReserved()) {
                 stockRepository.findById(reservation.getProductId())
                         .ifPresent(s -> s.release(reservation.getQuantity()));
+                reservation.release();
+            } else if (reservation.getStatus() == Reservation.Status.CONFIRMED) {
+                stockRepository.findById(reservation.getProductId())
+                        .ifPresent(s -> s.addStock(reservation.getQuantity()));
                 reservation.release();
             }
         }

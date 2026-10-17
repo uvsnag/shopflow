@@ -13,6 +13,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.Serializable;
 import java.util.List;
 
 @Service
@@ -37,11 +38,18 @@ public class ProductService {
                 result.getNumber(), result.getSize(), result.getTotalElements(), result.getTotalPages());
     }
 
-    public record PageResponse(List<ProductResponse> items, int page, int size, long totalItems, int totalPages) {}
+    /** Serializable because the default Redis cache serializer is JDK serialization. */
+    public record PageResponse(List<ProductResponse> items, int page, int size, long totalItems, int totalPages)
+            implements Serializable {}
 
+    /** FR-05/FR-12: a hidden product is gone for customers, not just missing from the list. */
     @Transactional(readOnly = true)
     public ProductResponse get(Long id) {
-        return ProductResponse.from(find(id));
+        Product product = find(id);
+        if (!product.isActive()) {
+            throw new NotFoundException("Product " + id + " not found");
+        }
+        return ProductResponse.from(product);
     }
 
     @CacheEvict(cacheNames = "products", allEntries = true)

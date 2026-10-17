@@ -1,6 +1,8 @@
 package com.shopflow.payment.config;
 
 import com.shopflow.common.security.GatewayHeaderAuthFilter;
+import org.springframework.boot.web.client.ClientHttpRequestFactories;
+import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -11,6 +13,8 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.client.RestClient;
 
+import java.time.Duration;
+
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
@@ -18,7 +22,13 @@ public class SecurityConfig {
 
     @Bean
     public RestClient.Builder restClientBuilder() {
-        return RestClient.builder(); // TODO: set 3s connect/read timeouts (NFR-11)
+        // NFR-11: 3s timeout on every call to the fake provider; retries and
+        // the circuit breaker are configured in application.yml (resilience4j)
+        return RestClient.builder()
+                .requestFactory(ClientHttpRequestFactories.get(
+                        ClientHttpRequestFactorySettings.DEFAULTS
+                                .withConnectTimeout(Duration.ofSeconds(2))
+                                .withReadTimeout(Duration.ofSeconds(3))));
     }
 
     @Bean

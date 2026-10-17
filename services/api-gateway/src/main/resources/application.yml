@@ -20,8 +20,11 @@ spring:
           filters:
             - name: RequestRateLimiter
               args:
-                redis-rate-limiter.replenishRate: 5      # NFR-05
-                redis-rate-limiter.burstCapacity: 5
+                # NFR-05: 5 tries per minute per IP. replenishRate is tokens
+                # per SECOND, so each request costs 12 tokens: 60/12 = 5/min.
+                redis-rate-limiter.replenishRate: 1
+                redis-rate-limiter.burstCapacity: 60
+                redis-rate-limiter.requestedTokens: 12
                 key-resolver: "#{@ipKeyResolver}"
         - id: auth
           uri: ${AUTH_URL:http://localhost:8081}
@@ -34,7 +37,7 @@ spring:
         - id: inventory
           uri: ${INVENTORY_URL:http://localhost:8083}
           predicates:
-            - Path=/api/v1/admin/inventory/**
+            - Path=/api/v1/admin/inventory/**,/api/v1/inventory/**
         - id: orders
           uri: ${ORDER_URL:http://localhost:8084}
           predicates:
@@ -52,6 +55,9 @@ shopflow:
   jwks-url: ${JWKS_URL:http://localhost:8081/.well-known/jwks.json}
 
 management:
+  metrics:
+    tags:
+      application: ${spring.application.name}
   endpoints:
     web:
       exposure:

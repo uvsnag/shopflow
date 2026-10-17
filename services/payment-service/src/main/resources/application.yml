@@ -47,6 +47,9 @@ resilience4j:
         wait-duration-in-open-state: 30s
 
 management:
+  metrics:
+    tags:
+      application: ${spring.application.name}
   endpoints:
     web:
       exposure:

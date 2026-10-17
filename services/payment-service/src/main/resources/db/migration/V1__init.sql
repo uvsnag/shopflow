@@ -1,6 +1,7 @@
 CREATE TABLE payments (
     id              BIGSERIAL PRIMARY KEY,
     order_id        BIGINT       NOT NULL UNIQUE,  -- BR-04: one payment per order
+    user_id         BIGINT       NOT NULL,         -- FR-11: payment events carry the user
     amount          BIGINT       NOT NULL CHECK (amount > 0),
     status          VARCHAR(20)  NOT NULL DEFAULT 'PENDING',
     provider_ref    VARCHAR(100),

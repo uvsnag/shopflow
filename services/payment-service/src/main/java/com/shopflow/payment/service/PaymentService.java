@@ -12,8 +12,10 @@ import com.shopflow.payment.repository.PaymentRepository;
 import com.shopflow.payment.repository.RefundRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Map;
 
@@ -26,24 +28,31 @@ public class PaymentService {
     private final RefundRepository refundRepository;
     private final FakeProviderClient providerClient;
     private final OutboxService outbox;
+    private final TransactionTemplate tx;
 
     public PaymentService(PaymentRepository paymentRepository,
                           RefundRepository refundRepository,
                           FakeProviderClient providerClient,
-                          OutboxService outbox) {
+                          OutboxService outbox,
+                          TransactionTemplate tx) {
         this.paymentRepository = paymentRepository;
         this.refundRepository = refundRepository;
         this.providerClient = providerClient;
         this.outbox = outbox;
+        this.tx = tx;
     }
 
     /**
      * FR-08 + NFR-10: create the payment idempotently, then ask the fake bank
-     * to charge. The result arrives later via the signed webhook. BR-04 is
-     * enforced twice: idempotency_key and order_id are both unique.
+     * to charge. The result arrives later via the signed webhook.
+     *
+     * Deliberately NOT one big @Transactional: the payment row is committed
+     * first, so the unique constraints on idempotency_key and order_id (BR-04)
+     * reject a concurrent double click BEFORE the provider is called — not at
+     * commit time, after the bank was already charged twice. It also means the
+     * DB transaction is not held open through up to ~9s of provider retries.
      */
-    @Transactional
-    public Payment createPayment(Long orderId, Long amount, String idempotencyKey) {
+    public Payment createPayment(Long userId, Long orderId, Long amount, String idempotencyKey) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new BadRequestException("Idempotency-Key header is required");
         }
@@ -55,16 +64,29 @@ public class PaymentService {
             throw new ConflictException("Order " + orderId + " already has a payment");
         }
 
-        Payment payment = paymentRepository.save(new Payment(orderId, amount, idempotencyKey));
+        Payment payment;
         try {
-            var response = providerClient.charge(payment.getId(), orderId, amount);
-            payment.setProviderRef(response.providerRef());
+            // repository.save runs in its own transaction and commits here
+            payment = paymentRepository.save(new Payment(userId, orderId, amount, idempotencyKey));
+        } catch (DataIntegrityViolationException raceLost) {
+            // a concurrent request won: same Idempotency-Key -> return its
+            // payment (NFR-10); same order, different key -> BR-04 conflict
+            return paymentRepository.findByIdempotencyKey(idempotencyKey)
+                    .orElseThrow(() -> new ConflictException("Order " + orderId + " already has a payment"));
+        }
+
+        Long paymentId = payment.getId();
+        try {
+            var response = providerClient.charge(paymentId, orderId, amount);
+            tx.executeWithoutResult(status -> paymentRepository.findById(paymentId)
+                    .ifPresent(p -> p.setProviderRef(response.providerRef())));
         } catch (Exception providerDown) {
             // NFR-11: retries + circuit breaker already ran; mark failed
-            log.warn("Provider charge failed for payment {}", payment.getId(), providerDown);
-            markFailed(payment, "provider unavailable");
+            log.warn("Provider charge failed for payment {}", paymentId, providerDown);
+            tx.executeWithoutResult(status -> paymentRepository.findById(paymentId)
+                    .ifPresent(p -> markFailed(p, "provider unavailable")));
         }
-        return payment;
+        return paymentRepository.findById(paymentId).orElse(payment);
     }
 
     /** Called by the webhook after the HMAC signature was verified (NFR-06). */
@@ -80,7 +102,8 @@ public class PaymentService {
             payment.succeed();
             outbox.append(EventTypes.TOPIC_PAYMENT_EVENTS, String.valueOf(payment.getOrderId()),
                     EventTypes.PAYMENT_SUCCEEDED,
-                    Map.of("paymentId", payment.getId(), "amount", payment.getAmount()));
+                    Map.of("paymentId", payment.getId(), "amount", payment.getAmount(),
+                            "userId", payment.getUserId()));
         } else {
             markFailed(payment, "provider declined");
         }
@@ -112,7 +135,8 @@ public class PaymentService {
             payment.refund();
             outbox.append(EventTypes.TOPIC_PAYMENT_EVENTS, String.valueOf(payment.getOrderId()),
                     EventTypes.PAYMENT_REFUNDED,
-                    Map.of("paymentId", payment.getId(), "amount", payment.getAmount(), "reason", reason));
+                    Map.of("paymentId", payment.getId(), "amount", payment.getAmount(),
+                            "reason", reason, "userId", payment.getUserId()));
         } catch (Exception e) {
             refund.fail();
             log.error("Refund failed for payment {} — needs manual retry", payment.getId(), e);
@@ -124,6 +148,7 @@ public class PaymentService {
         payment.fail();
         outbox.append(EventTypes.TOPIC_PAYMENT_EVENTS, String.valueOf(payment.getOrderId()),
                 EventTypes.PAYMENT_FAILED,
-                Map.of("paymentId", payment.getId(), "reason", reason));
+                Map.of("paymentId", payment.getId(), "reason", reason,
+                        "userId", payment.getUserId()));
     }
 }

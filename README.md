@@ -36,7 +36,9 @@ Then:
 - API gateway: http://localhost:8080/api/v1
 - MailHog (fake email inbox): http://localhost:8025
 - Zipkin: http://localhost:9411
-- Grafana: http://localhost:3001
+- Grafana: http://localhost:3001 (admin/admin, ShopFlow Overview dashboard is provisioned)
+
+Seeded admin login: `admin@shopflow.local` / `admin1234` (dev only).
 
 ## Build without Docker
 
@@ -54,5 +56,9 @@ security helpers), `services/*` (one Spring Boot app each),
 
 ## Status
 
-Rough scaffold generated from the project plan. TODOs are marked in code.
-# shopflow
+Scaffold generated from the project plan, then desk-reviewed and hardened
+(2026-10-17): atomic Kafka consumption + DLTs, double-charge and oversell
+races fixed, gateway header spoofing closed, JWT key from env. The frontend
+builds (verified with Node); the Java side has NOT yet been compiled on a
+machine with a JDK — run `mvn clean verify` first. Remaining TODOs are
+marked in code and docs/architecture.md lists known edge cases.

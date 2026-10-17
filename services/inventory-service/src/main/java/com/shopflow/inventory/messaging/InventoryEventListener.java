@@ -9,10 +9,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Handlers are @Transactional: the processed_events mark (NFR-09), the stock
+ * change and the outbox event commit or roll back as one unit, so a failure
+ * is retried instead of being lost as a false duplicate.
+ */
 @Component
 public class InventoryEventListener {
 
@@ -29,6 +35,7 @@ public class InventoryEventListener {
     }
 
     @KafkaListener(topics = EventTypes.TOPIC_ORDER_EVENTS, groupId = "inventory-service")
+    @Transactional
     public void onOrderEvent(String message) {
         EventEnvelope event = eventMapper.parse(message);
         if (!guard.markProcessed(event.eventId())) {
@@ -43,6 +50,7 @@ public class InventoryEventListener {
     }
 
     @KafkaListener(topics = EventTypes.TOPIC_PAYMENT_EVENTS, groupId = "inventory-service")
+    @Transactional
     public void onPaymentEvent(String message) {
         EventEnvelope event = eventMapper.parse(message);
         if (!guard.markProcessed(event.eventId())) {
@@ -61,10 +69,6 @@ public class InventoryEventListener {
                         Long.valueOf(i.get("productId").toString()),
                         Integer.parseInt(i.get("quantity").toString())))
                 .toList();
-        try {
-            inventoryService.reserveForOrder(event.orderId(), lines);
-        } catch (InventoryService.ReservationFailedException e) {
-            inventoryService.publishReservationFailed(e.orderId, e.getMessage());
-        }
+        inventoryService.reserveForOrder(event.orderId(), lines);
     }
 }

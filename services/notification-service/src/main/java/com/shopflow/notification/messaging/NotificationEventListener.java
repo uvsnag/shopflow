@@ -7,6 +7,7 @@ import com.shopflow.common.idempotency.IdempotencyGuard;
 import com.shopflow.notification.service.NotificationService;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Listens to every topic and turns order status changes into notifications
@@ -29,6 +30,7 @@ public class NotificationEventListener {
     @KafkaListener(
             topics = {EventTypes.TOPIC_ORDER_EVENTS, EventTypes.TOPIC_PAYMENT_EVENTS},
             groupId = "notification-service")
+    @Transactional
     public void onEvent(String message) {
         EventEnvelope event = eventMapper.parse(message);
         if (!guard.markProcessed(event.eventId())) {
@@ -36,7 +38,7 @@ public class NotificationEventListener {
         }
         Object userIdRaw = event.payload().get("userId");
         if (userIdRaw == null) {
-            return; // payment events carry no userId yet; order events do. TODO enrich events
+            return; // every event should carry userId; skip rather than crash if one doesn't
         }
         Long userId = Long.valueOf(userIdRaw.toString());
         String orderId = event.orderId();
@@ -51,6 +53,13 @@ public class NotificationEventListener {
                     "Order " + orderId + " shipped", "Your order is on its way.");
             case EventTypes.ORDER_DELIVERED -> notificationService.notifyUser(userId, "ORDER",
                     "Order " + orderId + " delivered", "Enjoy your purchase!");
+            case EventTypes.PAYMENT_SUCCEEDED -> notificationService.notifyUser(userId, "PAYMENT",
+                    "Payment received for order " + orderId, "Thank you! We are preparing your order.");
+            case EventTypes.PAYMENT_FAILED -> notificationService.notifyUser(userId, "PAYMENT",
+                    "Payment failed for order " + orderId,
+                    "Reason: " + event.payload().getOrDefault("reason", "unknown") + ". The order was cancelled.");
+            case EventTypes.PAYMENT_REFUNDED -> notificationService.notifyUser(userId, "PAYMENT",
+                    "Refund issued for order " + orderId, "Your payment was refunded.");
             default -> { }
         }
     }

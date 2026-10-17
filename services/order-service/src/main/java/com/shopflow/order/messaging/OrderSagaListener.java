@@ -8,10 +8,15 @@ import com.shopflow.order.domain.OrderStatus;
 import com.shopflow.order.service.OrderService;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Order side of the choreography saga: reacts to inventory and payment events
  * and moves the order through its status machine.
+ *
+ * Each handler is @Transactional so the processed_events mark (NFR-09) and the
+ * status change commit together: a failure rolls back both and the Kafka retry
+ * can process the event again instead of skipping it as a duplicate.
  */
 @Component
 public class OrderSagaListener {
@@ -27,6 +32,7 @@ public class OrderSagaListener {
     }
 
     @KafkaListener(topics = EventTypes.TOPIC_INVENTORY_EVENTS, groupId = "order-service")
+    @Transactional
     public void onInventoryEvent(String message) {
         EventEnvelope event = eventMapper.parse(message);
         if (!guard.markProcessed(event.eventId())) {
@@ -43,6 +49,7 @@ public class OrderSagaListener {
     }
 
     @KafkaListener(topics = EventTypes.TOPIC_PAYMENT_EVENTS, groupId = "order-service")
+    @Transactional
     public void onPaymentEvent(String message) {
         EventEnvelope event = eventMapper.parse(message);
         if (!guard.markProcessed(event.eventId())) {

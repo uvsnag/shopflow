@@ -1,15 +1,17 @@
 "use client";
 
 // FR-06 + FR-07: cart and checkout. Rough skeleton —
-// TODO: quantity editing, product names (join with product API), payment step.
+// TODO: quantity editing, product names (join with product API).
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api, placeOrder } from "@/lib/api";
 
 interface CartItem { productId: number; quantity: number }
 interface Cart { items: CartItem[] }
 
 export default function CartPage() {
+  const router = useRouter();
   const [cart, setCart] = useState<Cart | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -20,8 +22,8 @@ export default function CartPage() {
   async function checkout() {
     try {
       const order = await placeOrder();
-      setMessage(`Order placed: ${JSON.stringify(order)}`);
       setCart({ items: [] });
+      router.push(`/checkout?orderId=${order.id}`);
     } catch (e) {
       setMessage(String(e));
     }

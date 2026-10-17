@@ -18,23 +18,27 @@ import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.net.URL;
 import java.util.List;
 
 /**
  * Checks the RS256 JWT against auth-service's JWKS (NFR-02) and forwards the
- * identity as X-User-Id / X-User-Role headers (NFR-03). Public paths pass
- * through untouched.
+ * identity as X-User-Id / X-User-Role headers (NFR-03). Those two headers are
+ * ALWAYS stripped from the incoming request first — only the gateway may set
+ * them, or any client could impersonate any user on public routes.
  */
 @Component
 public class JwtAuthFilter implements GlobalFilter, Ordered {
+
+    public static final String USER_ID_HEADER = "X-User-Id";
+    public static final String USER_ROLE_HEADER = "X-User-Role";
 
     private static final List<String> PUBLIC_PATHS = List.of(
             "/api/v1/auth/register",
             "/api/v1/auth/login",
             "/api/v1/auth/refresh",
-            "/api/v1/products",
             "/api/v1/payments/webhook"
     );
 
@@ -54,34 +58,60 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         String path = exchange.getRequest().getPath().value();
-        if (isPublic(path, exchange.getRequest().getMethod() != null ? exchange.getRequest().getMethod().name() : "GET")) {
-            return chain.filter(exchange);
+        String method = exchange.getRequest().getMethod() != null
+                ? exchange.getRequest().getMethod().name() : "GET";
+
+        if (isPublic(path, method)) {
+            ServerHttpRequest cleaned = exchange.getRequest().mutate()
+                    .headers(h -> {
+                        h.remove(USER_ID_HEADER);
+                        h.remove(USER_ROLE_HEADER);
+                    })
+                    .build();
+            return chain.filter(exchange.mutate().request(cleaned).build());
         }
 
         String authHeader = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             return unauthorized(exchange);
         }
+        String token = authHeader.substring(7);
 
-        try {
-            JWTClaimsSet claims = jwtProcessor.process(authHeader.substring(7), null);
-            ServerHttpRequest mutated = exchange.getRequest().mutate()
-                    .header("X-User-Id", claims.getSubject())
-                    .header("X-User-Role", claims.getStringClaim("role"))
-                    .build();
-            return chain.filter(exchange.mutate().request(mutated).build());
-        } catch (Exception invalidToken) {
-            return unauthorized(exchange);
-        }
+        // nimbus fetches/refreshes the JWKS over blocking HTTP — keep it off
+        // the Netty event loop
+        return Mono.fromCallable(() -> jwtProcessor.process(token, null))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(claims -> {
+                    String role;
+                    try {
+                        role = claims.getStringClaim("role");
+                    } catch (java.text.ParseException e) {
+                        return unauthorized(exchange);
+                    }
+                    ServerHttpRequest mutated = exchange.getRequest().mutate()
+                            .headers(h -> {
+                                h.set(USER_ID_HEADER, claims.getSubject());
+                                h.set(USER_ROLE_HEADER, role);
+                            })
+                            .build();
+                    return chain.filter(exchange.mutate().request(mutated).build());
+                })
+                .onErrorResume(invalidToken -> unauthorized(exchange));
     }
 
     private boolean isPublic(String path, String method) {
-        // product browsing is public for GET only (FR-04, FR-05)
+        // product browsing is public for GET only (FR-04, FR-05);
+        // /api/v1/admin/products stays protected because it doesn't start
+        // with /api/v1/products
         if ("GET".equals(method) && path.startsWith("/api/v1/products")) {
             return true;
         }
-        return PUBLIC_PATHS.stream().anyMatch(path::startsWith)
-                && !path.startsWith("/api/v1/products"); // admin product paths handled above
+        // stock-left on product detail is public too (FR-05);
+        // /api/v1/admin/inventory does not match this prefix
+        if ("GET".equals(method) && path.startsWith("/api/v1/inventory")) {
+            return true;
+        }
+        return PUBLIC_PATHS.stream().anyMatch(path::startsWith);
     }
 
     private Mono<Void> unauthorized(ServerWebExchange exchange) {

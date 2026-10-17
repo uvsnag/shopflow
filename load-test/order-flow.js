@@ -39,7 +39,26 @@ export default function (data) {
   const orderRes = http.post(`${BASE}/orders`, null, {
     headers: { ...auth.headers, "Idempotency-Key": uuidv4() },
   });
+  // Overselling shows up as clean 409s here (stock reservation fails), never as
+  // extra 201s; the final stock-vs-orders comparison is done after the run.
   check(orderRes, { "order placed or rejected cleanly": (r) => [201, 400, 409].includes(r.status) });
+
+  if (orderRes.status === 201) {
+    // NFR-17: pressing "Pay" twice must charge once.
+    const order = orderRes.json();
+    const payBody = JSON.stringify({ orderId: order.id, amount: order.totalAmount });
+    const payHeaders = { headers: { ...auth.headers, "Idempotency-Key": uuidv4() } };
+    const pay1 = http.post(`${BASE}/payments`, payBody, payHeaders);
+    const pay2 = http.post(`${BASE}/payments`, payBody, payHeaders); // same key: replay
+    check(pay2, {
+      "no double charge: same key replays same payment": (r) =>
+        pay1.status === 202 && r.status === 202 && r.json("paymentId") === pay1.json("paymentId"),
+    });
+    const pay3 = http.post(`${BASE}/payments`, payBody, {
+      headers: { ...auth.headers, "Idempotency-Key": uuidv4() }, // new key, same order
+    });
+    check(pay3, { "no double charge: second payment for order rejected": (r) => r.status === 409 });
+  }
 
   sleep(1);
 }

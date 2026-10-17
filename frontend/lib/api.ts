@@ -64,8 +64,34 @@ export interface ProductPage {
 export const getProducts = (q = "", page = 0) =>
   api<ProductPage>(`/products?q=${encodeURIComponent(q)}&page=${page}&size=20`);
 
+export interface OrderItem {
+  productId: number;
+  productName: string;
+  unitPrice: number;
+  quantity: number;
+}
+
+export interface Order {
+  id: number;
+  status: string;
+  totalAmount: number;
+  currency: string;
+  createdAt: string;
+  items: OrderItem[];
+}
+
 export const placeOrder = () =>
-  api("/orders", {
+  api<Order>("/orders", {
     method: "POST",
     headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+
+export const getOrder = (id: number | string) => api<Order>(`/orders/${id}`);
+
+// FR-08 + NFR-10: pay for an order, idempotent on the Idempotency-Key header.
+export const payOrder = (orderId: number, amount: number) =>
+  api<{ paymentId: number; orderId: number; status: string }>("/payments", {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ orderId, amount }),
   });

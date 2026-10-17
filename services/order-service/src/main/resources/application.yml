@@ -30,6 +30,9 @@ shopflow:
   payment-timeout: 15m   # BR-03
 
 management:
+  metrics:
+    tags:
+      application: ${spring.application.name}
   endpoints:
     web:
       exposure:

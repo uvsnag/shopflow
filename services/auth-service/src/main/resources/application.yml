@@ -25,8 +25,14 @@ shopflow:
   jwt:
     access-ttl: 15m   # FR-02
     refresh-ttl: 7d
+    # NFR-07: PKCS#8 PEM from env / AWS Secrets Manager. Empty = generate a
+    # throwaway dev key at startup (restarts then invalidate all tokens).
+    private-key-pem: ${JWT_PRIVATE_KEY_PEM:}
 
 management:
+  metrics:
+    tags:
+      application: ${spring.application.name}
   endpoints:
     web:
       exposure:

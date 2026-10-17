@@ -1,0 +1,138 @@
+Senior Fullstack Developer (Java & JavaScript) ~7 years of experience
+
+
+SUMMARY
+Senior Full-stack Developer with 7 years of experience building enterprise applications using Java, Spring Boot, React, and Next.js. Experienced in technical leadership, code reviews, and mentoring, and legacy system modernization. Specialized in AI-assisted development, designing reusable prompts and skills for AI coding agents to accelerate legacy UI migration, reducing development time for medium-complexity screens from approximately 10 days to 2–3 days. Designed and developed a PostgreSQL migration toolkit that reduced routine database migration time by up to 87.5%, enabled developer self-service, and achieved zero production incidents. Comfortable collaborating with international teams in English.
+
+SKILLS
+Backend & Architecture
+- Languages & Frameworks: Java, Spring Boot
+- System Design & Architecture: Microservices, Monolithic Architecture
+- API Development: RESTful APIs
+- Security: Spring Security, JWT
+- ORM & Data Access: MyBatis
+- Databases: PostgreSQL, SQL Server
+- Testing: JUnit 5, Mockito
+
+Frontend
+- Languages: JavaScript, TypeScript
+- Frameworks & Libraries: React.js, Next.js, React Hooks
+- UI Components & Data Grids: IBSheet, Webix
+
+English
+- Upper Intermediate, assessed by CyberLogitec's internal English evaluation (Level 3).
+- Comfortable working and communicating in English with international teams.
+
+DevOps & Tools
+- CI/CD, Git, Docker, AWS (Basic)
+
+Engineering Practices
+- Legacy System Modernization & Data Migration
+- AI-Assisted Development & Prompt Engineering
+- SQL Query Optimization & Performance Tuning
+- System Design & Architecture
+
+Leadership & Soft Skills
+- Technical Leadership & Mentoring
+- Code Review & Technical Decision-Making
+- Task Coordination & Team Collaboration
+- Problem-Solving & Analytical Thinking
+
+Methodologies
+- Agile (Scrum)
+- Waterfall
+
+WORK EXPERIENCE
+
+CyberLogitec Vietnam Co., Ltd. | 2023 - Present
+
+Project: CARIS UPGRADE – Enterprise Logistics Management Platform
+Period: Sep 2025 - Present (1 year)
+Role: Senior Full-stack Developer | Backup Team Lead
+Team Size: 30
+Tech Stack: React.js Hooks, TypeScript, Next.js, Spring Boot, MyBatis, SQL Server, JUnit 5, Mockito
+Description:
+A large-scale, multi-tenant logistics platform — modernized and migrated from a legacy system — supporting sales, freight (ocean/air), warehouse, accounting, and EDI operations.
+Key Contributions:
+- Led and contributed to the modernization of a legacy logistics system, migrating legacy UI screens and backend functionality to Next.js, React, TypeScript, and Java Spring Boot while preserving existing business logic.
+- Designed reusable prompts and skills for AI coding agents (GitHub Copilot and Claude) to support legacy UI migration, enabling agents to generate approximately 60–80% of initial UI implementation and screen logic, depending on complexity.
+- Established an AI-assisted development workflow covering code generation, refactoring, and code review, reducing development time for medium-complexity UI screens from approximately 10 days to 2–3 days (70–80% reduction).
+- Reviewed AI-generated code, validated business logic, and refined implementations to maintain code quality, consistency, and compatibility with existing system behavior.
+- Standardized API patterns for error handling, authentication, and request processing, improving consistency across modules.
+- Mentored developers and served as Backup Team Lead, coordinating and tracking tasks for 8 team members and reviewing and merging code into the main branch.
+Achievements:
+- Reduced development time for medium-complexity UI migrations by approximately 70–80% through reusable AI-agent prompts, skills, and standardized workflows.
+- Enabled AI coding agents to generate approximately 60–80% of initial UI implementation and screen logic, reducing repetitive development effort.
+- Improved code quality and maintainability through structured code reviews and validation of AI-generated code.
+- Increased team efficiency by introducing reusable AI-assisted development practices for legacy system modernization.
+
+Project: FWD Database Migration Toolkit
+Period: Jan 2025 - Sep 2025 (9 months)
+Role: Senior Full-Stack Developer (Sole Developer)
+Team Size: 1
+Tech Stack: Node.js, PostgreSQL, JavaScript
+Description:
+A high-performance data migration and validation toolkit for multi-environment PostgreSQL systems across 10+ modules (~100+ tables).
+Key Contributions:
+- Architected a streaming-based migration pipeline using PostgreSQL COPY protocol for high-throughput data transfer (up to 100K rows/batch).
+- Automated production-to-development/test database migration workflows, enabling developers to execute routine data transfers independently instead of relying on DBA-operated export/import procedures.
+- Built a multi-phase validation system including schema comparison, row-level validation, and record reconciliation.
+- Implemented data masking for sensitive information (PII), ensuring compliance during cross-environment transfers.
+- Developed real-time monitoring UI with live progress tracking, logging, and fail-safe controls.
+- Ran and maintained the tool daily to migrate data between environments for the team.
+Achievements:
+- Reduced database migration time from 1–2 hours to 15–30 minutes, cutting execution time by approximately 75–87.5%.
+- Eliminated dependency on DBA availability for routine migrations, enabling developers to independently migrate data between production and development/test environments.
+- Achieved zero production incidents through automated validation and fail-safe mechanisms.
+
+Project: FWD – Freight Forwarding Platform (Agile/Scrum)
+Period: Feb 2023 - Sep 2025 (2.5 years)
+Role: Senior Full-Stack Developer | Deputy Team Lead
+Team Size: 20
+Tech Stack: Java, Spring Boot, MyBatis, PostgreSQL, JavaScript, Webix
+Description:
+Enterprise logistics platform covering booking, warehouse, accounting, billing, and tracking.
+Key Contributions:
+- Developed and maintained scalable full-stack features, ensuring data consistency and system reliability across multiple modules.
+- Supported sprint planning, task coordination, and technical decision-making.
+- Conducted code reviews and enforced coding standards across the team.
+- Mentored junior developers and resolved complex technical issues.
+- Collaborated with DBA and DevOps teams to troubleshoot performance issues and optimize system operations.
+Achievements:
+- Reduced report generation time by 60% through SQL query optimization and indexing.
+- Increased team productivity and code quality via mentoring, code reviews, and better development practices.
+- Contributed to stable and scalable system delivery across multiple business-critical modules.
+
+WOWCNS Vietnam | 2022 - 2023
+
+Project: WowNet, MyOffice – Shopping & Membership Platform
+Role: Full-stack Developer | Team Lead
+Team Size: 8
+Tech Stack: Java Spring, ReactJS, TypeScript, PostgreSQL
+Key Contributions:
+- Delivered full-stack features and maintained system stability.
+- Led and mentored 4 members, improving team capability and onboarding efficiency.
+- Implemented backend business logic and database interactions.
+- Supported maintenance, bug fixing, and feature enhancements.
+Achievements:
+- Increased team productivity through mentoring and structured guidance.
+- Maintained stable system operations with minimal downtime.
+
+ALLEXCEED Vietnam Inc. | 2019 - 2022
+
+Project: IFront – TV Service Management System (partially outsource)
+Role: Full-stack Developer
+Team Size: 15
+Tech Stack: Spring Boot, React.js, PostgreSQL
+Key Contributions:
+- Developed modern web features using React (Hooks) and Spring Boot.
+- Improved UI/UX and frontend maintainability.
+- Built and optimized backend services and database queries.
+- Conducted API testing and validation using Postman.
+
+CERTIFICATIONS
+English Proficiency Assessment – Level 3 (Upper Intermediate), CyberLogitec Vietnam | 2025
+
+EDUCATION
+HCMC University of Technology and Education (HCMUTE) | 2015 - 2020
+Specialized: Software technology

@@ -21,6 +21,10 @@ public class Payment {
     @Column(name = "order_id", nullable = false, unique = true)
     private Long orderId;
 
+    /** Copied from the gateway identity at pay time, so payment events can carry it (FR-11). */
+    @Column(name = "user_id", nullable = false)
+    private Long userId;
+
     @Column(nullable = false)
     private Long amount;
 
@@ -42,13 +46,15 @@ public class Payment {
     protected Payment() {
     }
 
-    public Payment(Long orderId, Long amount, String idempotencyKey) {
+    public Payment(Long userId, Long orderId, Long amount, String idempotencyKey) {
+        this.userId = userId;
         this.orderId = orderId;
         this.amount = amount;
         this.idempotencyKey = idempotencyKey;
     }
 
     public Long getId() { return id; }
+    public Long getUserId() { return userId; }
     public Long getOrderId() { return orderId; }
     public Long getAmount() { return amount; }
     public Status getStatus() { return status; }

@@ -1,5 +1,6 @@
 package com.shopflow.payment.api;
 
+import com.shopflow.common.security.CurrentUser;
 import com.shopflow.payment.domain.Payment;
 import com.shopflow.payment.service.PaymentService;
 import jakarta.validation.Valid;
@@ -28,7 +29,7 @@ public class PaymentController {
     @ResponseStatus(HttpStatus.ACCEPTED)
     public Map<String, Object> pay(@RequestHeader(name = "Idempotency-Key") String idempotencyKey,
                                    @RequestBody @Valid CreatePaymentRequest req) {
-        Payment payment = paymentService.createPayment(req.orderId(), req.amount(), idempotencyKey);
+        Payment payment = paymentService.createPayment(CurrentUser.id(), req.orderId(), req.amount(), idempotencyKey);
         return Map.of("paymentId", payment.getId(),
                 "orderId", payment.getOrderId(),
                 "status", payment.getStatus().name());

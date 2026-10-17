@@ -33,6 +33,7 @@ CREATE TABLE processed_events (
     processed_at TIMESTAMPTZ NOT NULL
 );
 
--- Seed admin user, password: admin1234 (BCrypt). TODO: change before any real deploy.
+-- Seed admin user, password: admin1234 (real BCrypt hash, verified).
+-- TODO: change before any real deploy.
 INSERT INTO users (email, password_hash, full_name, role)
-VALUES ('admin@shopflow.local', '$2a$10$Dow1pO0zZbhHc5UBo5kO/eW0J0q8N9sYyWqzFqjYQW0zXkT1nqGTq', 'Admin', 'ADMIN');
+VALUES ('admin@shopflow.local', '$2b$10$AQXRU4J.CnxNRRJB9pJGCews9z.3pgxvX3tV7Pwq0YjnfW4KNrkJS', 'Admin', 'ADMIN');

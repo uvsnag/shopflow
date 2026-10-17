@@ -1,0 +1,13 @@
+{
+  "name": "fake-payment-provider",
+  "version": "0.1.0",
+  "description": "Tiny app that pretends to be a bank: ~80% success, ~20% fail, sometimes slow",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "4.19.2"
+  }
+}

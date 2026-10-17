@@ -1,0 +1,58 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    gateway:
+      default-filters:
+        - StripPrefix=2   # /api/v1/** -> /**
+      routes:
+        - id: auth-login-rate-limited
+          uri: ${AUTH_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/auth/login
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 5      # NFR-05
+                redis-rate-limiter.burstCapacity: 5
+                key-resolver: "#{@ipKeyResolver}"
+        - id: auth
+          uri: ${AUTH_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/auth/**
+        - id: products
+          uri: ${PRODUCT_URL:http://localhost:8082}
+          predicates:
+            - Path=/api/v1/products/**,/api/v1/admin/products/**
+        - id: inventory
+          uri: ${INVENTORY_URL:http://localhost:8083}
+          predicates:
+            - Path=/api/v1/admin/inventory/**
+        - id: orders
+          uri: ${ORDER_URL:http://localhost:8084}
+          predicates:
+            - Path=/api/v1/cart/**,/api/v1/orders/**,/api/v1/admin/orders/**
+        - id: payments
+          uri: ${PAYMENT_URL:http://localhost:8085}
+          predicates:
+            - Path=/api/v1/payments/**,/api/v1/admin/payments/**
+        - id: notifications
+          uri: ${NOTIFICATION_URL:http://localhost:8086}
+          predicates:
+            - Path=/api/v1/notifications/**
+
+shopflow:
+  jwks-url: ${JWKS_URL:http://localhost:8081/.well-known/jwks.json}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus

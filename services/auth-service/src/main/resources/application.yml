@@ -1,0 +1,33 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: auth-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/auth_db
+    username: ${DB_USER:shopflow}
+    password: ${DB_PASSWORD:shopflow}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+  # auth-service does not publish events yet, but the common lib pulls Kafka in
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+shopflow:
+  jwt:
+    access-ttl: 15m   # FR-02
+    refresh-ttl: 7d
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus

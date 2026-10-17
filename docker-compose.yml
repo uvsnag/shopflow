@@ -1,0 +1,205 @@
+# Whole system on one laptop: docker compose up --build
+name: shopflow
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  environment: &service-env
+    DB_HOST: postgres
+    DB_USER: shopflow
+    DB_PASSWORD: shopflow
+    KAFKA_BOOTSTRAP: kafka:9092
+    REDIS_HOST: redis
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shopflow
+      POSTGRES_PASSWORD: shopflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  kafka:
+    image: apache/kafka:3.8.0   # KRaft mode, no Zookeeper
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # web inbox
+
+  zipkin:
+    image: openzipkin/zipkin:3
+    ports:
+      - "9411:9411"
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9091:9090"
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./infra/grafana:/etc/grafana/provisioning
+
+  fake-payment-provider:
+    build: ./tools/fake-payment-provider
+    environment:
+      WEBHOOK_SECRET: local-dev-secret
+    ports:
+      - "9090:9090"
+
+  api-gateway:
+    <<: *service-defaults
+    build:
+      context: .
+      args: { SERVICE: api-gateway }
+    environment:
+      <<: *service-env
+      AUTH_URL: http://auth-service:8081
+      PRODUCT_URL: http://product-service:8082
+      INVENTORY_URL: http://inventory-service:8083
+      ORDER_URL: http://order-service:8084
+      PAYMENT_URL: http://payment-service:8085
+      NOTIFICATION_URL: http://notification-service:8086
+      JWKS_URL: http://auth-service:8081/.well-known/jwks.json
+      SERVER_PORT: "8080"
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis: { condition: service_healthy }
+      auth-service: { condition: service_started }
+
+  auth-service:
+    <<: *service-defaults
+    build:
+      context: .
+      args: { SERVICE: auth-service }
+    environment:
+      <<: *service-env
+      SERVER_PORT: "8081"
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+
+  product-service:
+    <<: *service-defaults
+    build:
+      context: .
+      args: { SERVICE: product-service }
+    environment:
+      <<: *service-env
+      SERVER_PORT: "8082"
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  inventory-service:
+    <<: *service-defaults
+    build:
+      context: .
+      args: { SERVICE: inventory-service }
+    environment:
+      <<: *service-env
+      SERVER_PORT: "8083"
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+
+  order-service:
+    <<: *service-defaults
+    build:
+      context: .
+      args: { SERVICE: order-service }
+    environment:
+      <<: *service-env
+      PRODUCT_URL: http://product-service:8082
+      SERVER_PORT: "8084"
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+
+  payment-service:
+    <<: *service-defaults
+    build:
+      context: .
+      args: { SERVICE: payment-service }
+    environment:
+      <<: *service-env
+      PROVIDER_URL: http://fake-payment-provider:9090
+      WEBHOOK_URL: http://payment-service:8085/payments/webhook
+      WEBHOOK_SECRET: local-dev-secret
+      SERVER_PORT: "8085"
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      fake-payment-provider: { condition: service_started }
+
+  notification-service:
+    <<: *service-defaults
+    build:
+      context: .
+      args: { SERVICE: notification-service }
+    environment:
+      <<: *service-env
+      MAIL_HOST: mailhog
+      MAIL_PORT: "1025"
+      SERVER_PORT: "8086"
+    depends_on:
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      mailhog: { condition: service_started }
+
+  frontend:
+    build: ./frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api-gateway
+
+volumes:
+  pgdata:

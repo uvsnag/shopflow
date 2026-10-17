@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: auth-service
+  config:
+    import: classpath:shopflow-defaults.yml   # Kafka, actuator, tracing, JSON logs
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/auth_db
     username: ${DB_USER:shopflow}
@@ -14,12 +16,6 @@ spring:
     open-in-view: false
   flyway:
     enabled: true
-  # auth-service does not publish events yet, but the common lib pulls Kafka in
-  kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
 shopflow:
   jwt:
@@ -28,12 +24,3 @@ shopflow:
     # NFR-07: PKCS#8 PEM from env / AWS Secrets Manager. Empty = generate a
     # throwaway dev key at startup (restarts then invalidate all tokens).
     private-key-pem: ${JWT_PRIVATE_KEY_PEM:}
-
-management:
-  metrics:
-    tags:
-      application: ${spring.application.name}
-  endpoints:
-    web:
-      exposure:
-        include: health,info,prometheus

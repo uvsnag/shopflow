@@ -16,7 +16,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -110,6 +109,40 @@ public class OrderService {
             default -> { /* PAID / STOCK_RESERVED / REFUNDED come from other services' events */ }
         }
         log.info("Order {} {} -> {} ({})", orderId, from, next, reason);
+    }
+
+    /**
+     * Saga step 5 (order side). A payment can land AFTER the order was already
+     * cancelled: the 15-minute timeout (or the customer) cancelled it while the
+     * bank's webhook was still in flight. The money must not stay with us, so
+     * instead of rejecting the event we ask payment-service to refund by
+     * emitting OrderCancelled once more. The order itself stays CANCELLED.
+     */
+    @Transactional
+    public void onPaymentSucceeded(Long orderId) {
+        Order order = find(orderId);
+        if (order.getStatus() == OrderStatus.CANCELLED) {
+            log.warn("Order {} was paid after cancellation; requesting a refund", orderId);
+            historyRepository.save(new OrderStatusHistory(orderId, OrderStatus.CANCELLED, OrderStatus.CANCELLED,
+                    "payment arrived after cancellation; refund requested"));
+            outbox.append(EventTypes.TOPIC_ORDER_EVENTS, String.valueOf(orderId), EventTypes.ORDER_CANCELLED,
+                    Map.of("reason", "paid after cancellation", "userId", order.getUserId(),
+                            "previousStatus", OrderStatus.CANCELLED.name()));
+            return;
+        }
+        changeStatus(orderId, OrderStatus.PAID, "payment succeeded");
+    }
+
+    /** Refund confirmed by payment-service. For a cancelled order it is only a history note. */
+    @Transactional
+    public void onPaymentRefunded(Long orderId) {
+        Order order = find(orderId);
+        if (order.getStatus() == OrderStatus.CANCELLED) {
+            historyRepository.save(new OrderStatusHistory(orderId, OrderStatus.CANCELLED, OrderStatus.CANCELLED,
+                    "late payment refunded"));
+            return;
+        }
+        changeStatus(orderId, OrderStatus.REFUNDED, "payment refunded");
     }
 
     /** FR-10: customer cancels. Paid orders are refunded via OrderCancelled -> payment-service. */

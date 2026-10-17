@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import NavBar from "@/components/NavBar";
 
 export const metadata: Metadata = {
   title: "ShopFlow",
@@ -9,13 +9,8 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body style={{ fontFamily: "system-ui, sans-serif", margin: 0 }}>
-        <header style={{ display: "flex", gap: 16, padding: "12px 16px", borderBottom: "1px solid #ddd" }}>
-          <Link href="/">ShopFlow</Link>
-          <Link href="/cart">Cart</Link>
-          <Link href="/orders">My orders</Link>
-          <Link href="/login">Login</Link>
-        </header>
+      <body style={{ fontFamily: "system-ui, sans-serif", margin: 0, color: "#111" }}>
+        <NavBar />
         <main style={{ padding: 16, maxWidth: 960, margin: "0 auto" }}>{children}</main>
       </body>
     </html>

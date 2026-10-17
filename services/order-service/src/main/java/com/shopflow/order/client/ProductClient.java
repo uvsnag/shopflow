@@ -2,8 +2,8 @@ package com.shopflow.order.client;
 
 import com.shopflow.common.web.BadRequestException;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.web.client.ClientHttpRequestFactories;
-import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
+import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
+import org.springframework.boot.http.client.ClientHttpRequestFactorySettings;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -25,8 +25,8 @@ public class ProductClient {
         // short timeouts: this call sits inside placing an order (NFR-15)
         this.restClient = RestClient.builder()
                 .baseUrl(baseUrl)
-                .requestFactory(ClientHttpRequestFactories.get(
-                        ClientHttpRequestFactorySettings.DEFAULTS
+                .requestFactory(ClientHttpRequestFactoryBuilder.detect().build(
+                        ClientHttpRequestFactorySettings.defaults()
                                 .withConnectTimeout(Duration.ofSeconds(2))
                                 .withReadTimeout(Duration.ofSeconds(3))))
                 .build();

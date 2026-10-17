@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: order-service
+  config:
+    import: classpath:shopflow-defaults.yml   # Kafka, actuator, tracing, JSON logs
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/order_db
     username: ${DB_USER:shopflow}
@@ -15,25 +17,9 @@ spring:
   flyway:
     enabled: true
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
     consumer:
       group-id: order-service
-      auto-offset-reset: earliest
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
 
 shopflow:
   product-service-url: ${PRODUCT_URL:http://localhost:8082}
   payment-timeout: 15m   # BR-03
-
-management:
-  metrics:
-    tags:
-      application: ${spring.application.name}
-  endpoints:
-    web:
-      exposure:
-        include: health,info,prometheus

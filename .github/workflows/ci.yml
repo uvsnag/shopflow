@@ -1,4 +1,6 @@
-# CI: build + test on every PR; build and push images on merge to main.
+# CI: build + test on every PR; build (and, when AWS is enabled, push) images on merge to main.
+# Plan items: path filters keep the pipeline fast, images are tagged by commit SHA,
+# AWS login uses GitHub OIDC (no stored keys). deploy.yml picks up successful main runs.
 name: CI
 
 on:
@@ -6,8 +8,43 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 jobs:
+  # Path filters (plan item 2): only run the jobs whose inputs changed. Push to main always runs everything.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ github.event_name == 'push' || steps.filter.outputs.backend }}
+      frontend: ${{ github.event_name == 'push' || steps.filter.outputs.frontend }}
+      provider: ${{ github.event_name == 'push' || steps.filter.outputs.provider }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            backend:
+              - 'pom.xml'
+              - 'mvnw*'
+              - '.mvn/**'
+              - 'libs/**'
+              - 'services/**'
+              - 'Dockerfile'
+            frontend:
+              - 'frontend/**'
+            provider:
+              - 'tools/**'
+
+  # Maven monorepo: unit tests via surefire, *IT via failsafe (Testcontainers needs the runner's Docker).
   backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,11 +53,29 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
-      # TODO: path filters so only changed services build (plan: keep pipeline fast)
       - name: Build and test
-        run: mvn -B clean verify
+        run: ./mvnw -B -ntp verify
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            **/target/surefire-reports/**
+            **/target/failsafe-reports/**
+          if-no-files-found: ignore
+      # Fail if the build changed tracked files or produced untracked ones (keeps generated files out of git).
+      - name: Check working tree is clean
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Build modified the working tree:"
+            git status --porcelain
+            exit 1
+          fi
 
   frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -30,29 +85,104 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: npm install
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
       - run: npm run build
 
-  docker-images:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [backend, frontend]
+  provider:
+    needs: changes
+    if: needs.changes.outputs.provider == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write   # GitHub OIDC -> AWS, no stored keys
-      contents: read
-    strategy:
-      matrix:
-        service:
-          - api-gateway
-          - auth-service
-          - product-service
-          - inventory-service
-          - order-service
-          - payment-service
-          - notification-service
+    defaults:
+      run:
+        working-directory: tools/fake-payment-provider
     steps:
       - uses: actions/checkout@v4
-      # TODO Phase 6: configure-aws-credentials with role-to-assume (OIDC),
-      # login to ECR, push image tagged with the commit SHA, then deploy.
-      - name: Build image
-        run: docker build --build-arg SERVICE=${{ matrix.service }} -t shopflow/${{ matrix.service }}:${{ github.sha }} .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: tools/fake-payment-provider/package-lock.json
+      - run: npm ci
+      - run: node --check index.js
+
+  # Plan item 3: on merge to main build every image, tag with the git SHA (+ latest), push to ECR.
+  # Pushing is gated on the AWS_DEPLOY_ENABLED repo variable so forks without AWS still get a green build.
+  images:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend, frontend, provider]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC token for AWS (plan item 5: no stored AWS keys)
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api-gateway
+            context: .
+            dockerfile: Dockerfile
+            build_args: SERVICE=api-gateway
+          - name: auth-service
+            context: .
+            dockerfile: Dockerfile
+            build_args: SERVICE=auth-service
+          - name: product-service
+            context: .
+            dockerfile: Dockerfile
+            build_args: SERVICE=product-service
+          - name: inventory-service
+            context: .
+            dockerfile: Dockerfile
+            build_args: SERVICE=inventory-service
+          - name: order-service
+            context: .
+            dockerfile: Dockerfile
+            build_args: SERVICE=order-service
+          - name: payment-service
+            context: .
+            dockerfile: Dockerfile
+            build_args: SERVICE=payment-service
+          - name: notification-service
+            context: .
+            dockerfile: Dockerfile
+            build_args: SERVICE=notification-service
+          - name: frontend
+            context: frontend
+            dockerfile: frontend/Dockerfile
+            # Next.js inlines NEXT_PUBLIC_* at build time; the Dockerfile must declare this ARG for it to take effect.
+            build_args: NEXT_PUBLIC_API_URL=http://${{ vars.DEMO_HOST || 'localhost' }}:8080/api/v1
+          - name: fake-payment-provider
+            context: tools/fake-payment-provider
+            dockerfile: tools/fake-payment-provider/Dockerfile
+            build_args: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials (OIDC)
+        if: vars.AWS_DEPLOY_ENABLED == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        if: vars.AWS_DEPLOY_ENABLED == 'true'
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Registry falls back to a local placeholder when AWS is disabled (build only, no push).
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          build-args: ${{ matrix.build_args }}
+          push: ${{ vars.AWS_DEPLOY_ENABLED == 'true' }}
+          tags: |
+            ${{ steps.ecr.outputs.registry || 'local' }}/shopflow/${{ matrix.name }}:${{ github.sha }}
+            ${{ steps.ecr.outputs.registry || 'local' }}/shopflow/${{ matrix.name }}:latest
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

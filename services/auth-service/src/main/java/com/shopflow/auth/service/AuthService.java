@@ -4,6 +4,8 @@ import com.shopflow.auth.domain.RefreshToken;
 import com.shopflow.auth.domain.User;
 import com.shopflow.auth.repository.RefreshTokenRepository;
 import com.shopflow.auth.repository.UserRepository;
+import com.shopflow.common.event.EventTypes;
+import com.shopflow.common.outbox.OutboxService;
 import com.shopflow.common.web.BadRequestException;
 import com.shopflow.common.web.ConflictException;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,6 +18,8 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -25,29 +29,44 @@ public class AuthService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final OutboxService outbox;
     private final Duration refreshTtl;
 
     public AuthService(UserRepository userRepository,
                        RefreshTokenRepository refreshTokenRepository,
                        PasswordEncoder passwordEncoder,
                        JwtService jwtService,
+                       OutboxService outbox,
                        @Value("${shopflow.jwt.refresh-ttl:7d}") Duration refreshTtl) {
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
+        this.outbox = outbox;
         this.refreshTtl = refreshTtl;
     }
 
     public record TokenPair(String accessToken, String refreshToken) {}
 
+    /**
+     * FR-01, NFR-01: BCrypt hash. Also publishes UserRegistered (via the
+     * outbox, NFR-08) so notification-service learns the e-mail address
+     * without ever reading auth_db.
+     */
     @Transactional
     public User register(String email, String password, String fullName) {
         if (userRepository.existsByEmail(email)) {
             throw new ConflictException("Email already registered");
         }
-        // FR-01, NFR-01: BCrypt hash
-        return userRepository.save(new User(email, passwordEncoder.encode(password), fullName));
+        User user = userRepository.save(new User(email, passwordEncoder.encode(password), fullName));
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("userId", user.getId());
+        payload.put("email", user.getEmail());
+        payload.put("fullName", fullName == null ? "" : fullName);
+        outbox.append(EventTypes.TOPIC_USER_EVENTS, String.valueOf(user.getId()), null,
+                EventTypes.USER_REGISTERED, payload);
+        return user;
     }
 
     @Transactional

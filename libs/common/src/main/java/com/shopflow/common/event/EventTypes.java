@@ -6,6 +6,8 @@ public final class EventTypes {
     public static final String TOPIC_ORDER_EVENTS = "order-events";
     public static final String TOPIC_INVENTORY_EVENTS = "inventory-events";
     public static final String TOPIC_PAYMENT_EVENTS = "payment-events";
+    /** auth-service -> notification-service: who to e-mail (keyed by userId, not orderId). */
+    public static final String TOPIC_USER_EVENTS = "user-events";
 
     public static final String ORDER_CREATED = "OrderCreated";
     public static final String ORDER_CANCELLED = "OrderCancelled";
@@ -18,6 +20,8 @@ public final class EventTypes {
     public static final String PAYMENT_SUCCEEDED = "PaymentSucceeded";
     public static final String PAYMENT_FAILED = "PaymentFailed";
     public static final String PAYMENT_REFUNDED = "PaymentRefunded";
+
+    public static final String USER_REGISTERED = "UserRegistered";
 
     private EventTypes() {
     }

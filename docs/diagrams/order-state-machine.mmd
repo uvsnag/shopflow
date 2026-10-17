@@ -1,0 +1,12 @@
+stateDiagram-v2
+    [*] --> PENDING: POST /orders
+    PENDING --> STOCK_RESERVED: StockReserved
+    PENDING --> CANCELLED: StockReservationFailed
+    STOCK_RESERVED --> PAID: PaymentSucceeded
+    STOCK_RESERVED --> CANCELLED: PaymentFailed / 15-min timeout / customer cancel
+    PAID --> SHIPPED: admin ships
+    PAID --> REFUNDED: customer cancel or admin refund
+    SHIPPED --> DELIVERED: admin delivers
+    DELIVERED --> [*]
+    CANCELLED --> [*]
+    REFUNDED --> [*]

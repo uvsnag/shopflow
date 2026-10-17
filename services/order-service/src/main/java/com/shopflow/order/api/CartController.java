@@ -3,6 +3,7 @@ package com.shopflow.order.api;
 import com.shopflow.common.security.CurrentUser;
 import com.shopflow.order.api.dto.OrderDtos.CartResponse;
 import com.shopflow.order.service.CartService;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -27,7 +28,7 @@ public class CartController {
     }
 
     @PutMapping("/items/{productId}")
-    public CartResponse putItem(@PathVariable Long productId, @RequestBody PutItemRequest req) {
+    public CartResponse putItem(@PathVariable Long productId, @RequestBody @Valid PutItemRequest req) {
         return CartResponse.from(cartService.putItem(CurrentUser.id(), productId, req.quantity()));
     }
 

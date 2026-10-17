@@ -1,0 +1,29 @@
+sequenceDiagram
+    actor C as Customer
+    participant O as order-service
+    participant I as inventory-service
+    participant P as payment-service
+    participant B as fake-payment-provider
+
+    C->>O: 1. POST /orders (Idempotency-Key)
+    Note over O: status = PENDING<br/>save order + OrderCreated in outbox
+    O-)I: 2. OrderCreated
+    alt enough stock
+        I-)O: 3. StockReserved
+        Note over O: status = STOCK_RESERVED
+    else not enough stock
+        I-)O: StockReservationFailed
+        Note over O: status = CANCELLED
+    end
+    C->>P: 4. POST /payments (Idempotency-Key)
+    P->>B: charge (timeout 3s, 3 retries, circuit breaker)
+    B-->>P: signed webhook (success or fail)
+    alt payment succeeded
+        P-)O: 5. PaymentSucceeded
+        Note over O: status = PAID
+        P-)I: 6. PaymentSucceeded → confirm stock
+    else payment failed
+        P-)O: PaymentFailed
+        Note over O: status = CANCELLED
+        O-)I: OrderCancelled → release stock
+    end

@@ -1,0 +1,110 @@
+# Production override for the EC2 box (ADR 0010, option A). Always used together with the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+#
+# What changes versus local dev:
+#   * every app container runs the ECR image built by CI (tag = git SHA, IMAGE_TAG) instead of building
+#   * PostgreSQL is Amazon RDS (plan: "RDS PostgreSQL free tier"); DB_HOST/DB_USER/DB_PASSWORD come from
+#     /opt/shopflow/.env, which the instance writes at boot from AWS Secrets Manager (infra/aws/ec2.tf)
+#   * the local `postgres` container is parked behind the "local-db" profile so it never starts in prod;
+#     compose cannot delete a service in an override and depends_on lists MERGE, so each service also
+#     replaces its depends_on with `!override` (Compose v2.24+) to drop the postgres dependency.
+#     Trade-off: running postgres on the box would be simpler (one file, no RDS), but RDS keeps data
+#     off the 30 GB root disk, survives instance replacement and matches what the plan/ADR promise.
+#   * Kafka / Redis / Postgres ports are not published (only 80/3000/8080 are reachable through the SG).
+#
+# Required in .env: ECR_REGISTRY, DB_HOST, DB_USER, DB_PASSWORD, JWT_PRIVATE_KEY_PEM, WEBHOOK_SECRET,
+# DEMO_HOST, IMAGE_TAG (deploy.yml passes IMAGE_TAG=<sha> on the command line, which wins over .env).
+
+x-prod-env: &prod-env
+  DB_HOST: ${DB_HOST}
+  DB_USER: ${DB_USER}
+  DB_PASSWORD: ${DB_PASSWORD}
+  ZIPKIN_URL: http://zipkin:9411
+  SPRING_PROFILES_ACTIVE: json-logs
+
+services:
+  postgres:
+    profiles: ["local-db"] # not started in prod; `--profile local-db` brings it back for experiments
+    ports: !reset []
+
+  kafka:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  mailhog:
+    ports: !reset []
+
+  fake-payment-provider:
+    image: ${ECR_REGISTRY}/shopflow/fake-payment-provider:${IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+
+  api-gateway:
+    image: ${ECR_REGISTRY}/shopflow/api-gateway:${IMAGE_TAG:-latest}
+    pull_policy: always
+    environment: *prod-env
+    depends_on: !override
+      redis: { condition: service_healthy }
+      auth-service: { condition: service_started }
+
+  auth-service:
+    image: ${ECR_REGISTRY}/shopflow/auth-service:${IMAGE_TAG:-latest}
+    pull_policy: always
+    environment:
+      <<: *prod-env
+      JWT_PRIVATE_KEY_PEM: ${JWT_PRIVATE_KEY_PEM}
+    depends_on: !override
+      kafka: { condition: service_healthy }
+
+  product-service:
+    image: ${ECR_REGISTRY}/shopflow/product-service:${IMAGE_TAG:-latest}
+    pull_policy: always
+    environment: *prod-env
+    depends_on: !override
+      kafka: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  inventory-service:
+    image: ${ECR_REGISTRY}/shopflow/inventory-service:${IMAGE_TAG:-latest}
+    pull_policy: always
+    environment: *prod-env
+    depends_on: !override
+      kafka: { condition: service_healthy }
+
+  order-service:
+    image: ${ECR_REGISTRY}/shopflow/order-service:${IMAGE_TAG:-latest}
+    pull_policy: always
+    environment: *prod-env
+    depends_on: !override
+      kafka: { condition: service_healthy }
+
+  payment-service:
+    image: ${ECR_REGISTRY}/shopflow/payment-service:${IMAGE_TAG:-latest}
+    pull_policy: always
+    environment:
+      <<: *prod-env
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+    depends_on: !override
+      kafka: { condition: service_healthy }
+      fake-payment-provider: { condition: service_started }
+
+  notification-service:
+    image: ${ECR_REGISTRY}/shopflow/notification-service:${IMAGE_TAG:-latest}
+    pull_policy: always
+    environment: *prod-env
+    depends_on: !override
+      kafka: { condition: service_healthy }
+      mailhog: { condition: service_started }
+
+  frontend:
+    image: ${ECR_REGISTRY}/shopflow/frontend:${IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      # Next.js inlines NEXT_PUBLIC_* at build time (CI passes the same value as a build-arg);
+      # set here too so a runtime read, if the code is changed to do one, gets the right host.
+      NEXT_PUBLIC_API_URL: http://${DEMO_HOST}:8080/api/v1

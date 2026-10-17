@@ -1,0 +1,142 @@
+# Deploy (plan item 4): after CI succeeds on main, pull the SHA-tagged images on the EC2 box
+# via AWS SSM Run Command (no SSH), then smoke test /actuator/health through the gateway and
+# inside the box for each service. Runs only when the AWS_DEPLOY_ENABLED repo variable is 'true'.
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Commit SHA to deploy (images are tagged by SHA; defaults to the current commit)"
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: >-
+      vars.AWS_DEPLOY_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC -> AWS (plan item 5)
+      contents: read
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      DEMO_HOST: ${{ vars.DEMO_HOST }}
+      # Full commit SHA: used both for `git checkout` on the box and as the image tag.
+      SHA: ${{ github.event.inputs.image_tag || github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # Script runs as root on the instance. ECR login tokens expire after 12 h, so log in again every deploy.
+      - name: Deploy via SSM Run Command
+        run: |
+          cat > deploy.sh <<'EOF'
+          set -euo pipefail
+          cd /opt/shopflow
+          REGISTRY=$(grep '^ECR_REGISTRY=' .env | cut -d= -f2-)
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+          git fetch --all --prune
+          git checkout --force "$SHA"
+          export IMAGE_TAG="$SHA"
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build --remove-orphans
+          docker image prune -af --filter "until=24h" >/dev/null || true
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
+          EOF
+          # Prepend the variables the script needs (SSM has no env passthrough).
+          { echo "export AWS_REGION='$AWS_REGION' SHA='$SHA'"; cat deploy.sh; } > deploy.full.sh
+          jq -n --rawfile s deploy.full.sh '{commands: [$s], executionTimeout: ["900"]}' > params.json
+
+          CMD_ID=$(aws ssm send-command \
+            --document-name AWS-RunShellScript \
+            --instance-ids "$INSTANCE_ID" \
+            --comment "shopflow deploy $SHA" \
+            --parameters file://params.json \
+            --query 'Command.CommandId' --output text)
+          echo "SSM command: $CMD_ID"
+
+          # Poll until the command leaves Pending/InProgress; fail the job on anything but Success.
+          for i in $(seq 1 90); do
+            STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+                       --query Status --output text 2>/dev/null || echo Pending)
+            case "$STATUS" in
+              Pending|InProgress|Delayed) sleep 10 ;;
+              *) break ;;
+            esac
+          done
+          aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --query '{Status:Status,Out:StandardOutputContent,Err:StandardErrorContent}' --output json \
+            | jq -r '"STATUS: \(.Status)\n--- stdout ---\n\(.Out)\n--- stderr ---\n\(.Err)"'
+          [ "$STATUS" = "Success" ] || { echo "::error::SSM deploy command ended with status $STATUS"; exit 1; }
+
+      # External smoke test from the runner: gateway health + a public read endpoint, retried for ~5 min
+      # (JVMs + Kafka on a t3.large take a couple of minutes to come up).
+      - name: Smoke test (gateway, from the runner)
+        run: |
+          BASE="http://$DEMO_HOST:8080"
+          ok=0
+          for i in $(seq 1 30); do
+            health=$(curl -fsS --max-time 10 "$BASE/actuator/health" 2>/dev/null || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/api/v1/products" || true)
+            if echo "$health" | grep -q '"status":"UP"' && [ "$code" = "200" ]; then ok=1; break; fi
+            echo "attempt $i: health=${health:-<none>} products=$code; retrying in 10s"
+            sleep 10
+          done
+          [ "$ok" = 1 ] || { echo "::error::gateway smoke test failed for $BASE"; exit 1; }
+          echo "gateway UP, GET /api/v1/products -> 200"
+
+      # Internal smoke test (plan: call /actuator/health on each service) via a second SSM command.
+      - name: Smoke test (each service, inside the box)
+        run: |
+          cat > smoke.sh <<'EOF'
+          set -uo pipefail
+          cd /opt/shopflow
+          COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+          failed=0
+          for pair in api-gateway:8080 auth-service:8081 product-service:8082 inventory-service:8083 \
+                      order-service:8084 payment-service:8085 notification-service:8086; do
+            svc=${pair%%:*}; port=${pair##*:}
+            body=$($COMPOSE exec -T "$svc" wget -qO- "http://localhost:$port/actuator/health" 2>/dev/null || true)
+            if echo "$body" | grep -q '"status":"UP"'; then
+              echo "UP    $svc"
+            else
+              echo "DOWN  $svc -> ${body:-<no response>}"; failed=1
+            fi
+          done
+          exit $failed
+          EOF
+          jq -n --rawfile s smoke.sh '{commands: [$s], executionTimeout: ["300"]}' > params.json
+          CMD_ID=$(aws ssm send-command \
+            --document-name AWS-RunShellScript \
+            --instance-ids "$INSTANCE_ID" \
+            --comment "shopflow smoke test $SHA" \
+            --parameters file://params.json \
+            --query 'Command.CommandId' --output text)
+          for i in $(seq 1 30); do
+            STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+                       --query Status --output text 2>/dev/null || echo Pending)
+            case "$STATUS" in
+              Pending|InProgress|Delayed) sleep 10 ;;
+              *) break ;;
+            esac
+          done
+          aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --query 'StandardOutputContent' --output text
+          [ "$STATUS" = "Success" ] || { echo "::error::one or more services are not UP (status $STATUS)"; exit 1; }

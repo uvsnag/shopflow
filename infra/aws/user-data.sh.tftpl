@@ -1,0 +1,61 @@
+#!/bin/bash
+# First-boot setup for the ShopFlow demo box (Amazon Linux 2023). Log: /var/log/cloud-init-output.log
+# Terraform templatefile: dollar-brace with a doubled dollar is literal bash; a single one is filled in by Terraform.
+set -euxo pipefail
+export AWS_DEFAULT_REGION="${region}"
+
+# ---- packages: docker + compose plugin, git, psql, jq (aws cli ships with AL2023) ----
+dnf install -y docker git jq
+dnf install -y postgresql16 || dnf install -y postgresql15
+COMPOSE_VERSION=v2.29.7   # needs >= 2.24 for the !override / !reset tags in docker-compose.prod.yml
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL "https://github.com/docker/compose/releases/download/$${COMPOSE_VERSION}/docker-compose-linux-x86_64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+# Keep container logs from filling the 30 GB disk.
+cat > /etc/docker/daemon.json <<'JSON'
+{ "log-driver": "json-file", "log-opts": { "max-size": "20m", "max-file": "3" } }
+JSON
+systemctl enable --now docker
+usermod -aG docker ec2-user || true
+
+# ---- repo ----
+if [ ! -d /opt/shopflow/.git ]; then
+  git clone --branch "${git_branch}" "https://github.com/${github_repo}.git" /opt/shopflow
+fi
+cd /opt/shopflow
+git config --global --add safe.directory /opt/shopflow
+
+# ---- /opt/shopflow/.env from Secrets Manager (docker compose reads it automatically) ----
+SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "${secret_id}" --query SecretString --output text)
+DB_PASSWORD=$(echo "$SECRET_JSON" | jq -r .DB_PASSWORD)
+umask 077
+{
+  echo "ECR_REGISTRY=${ecr_registry}"
+  echo "AWS_REGION=${region}"
+  echo "IMAGE_TAG=latest"
+  echo "DEMO_HOST=${demo_host}"
+  echo "DB_HOST=${db_host}"
+  echo "DB_USER=${db_user}"
+  echo "DB_PASSWORD=$(echo "$SECRET_JSON" | jq -r '.DB_PASSWORD | @json')"
+  echo "WEBHOOK_SECRET=$(echo "$SECRET_JSON" | jq -r '.WEBHOOK_SECRET | @json')"
+  # Multi-line PEM: compose expands \n inside a double-quoted .env value, @json produces exactly that.
+  echo "JWT_PRIVATE_KEY_PEM=$(echo "$SECRET_JSON" | jq -r '.JWT_PRIVATE_KEY_PEM | @json')"
+} > /opt/shopflow/.env
+umask 022
+
+# ---- one database per service on RDS (ADR 0002); idempotent ----
+export PGPASSWORD="$DB_PASSWORD"
+for i in $(seq 1 30); do
+  pg_isready -h "${db_host}" -U "${db_user}" && break || sleep 10
+done
+%{ for db in databases ~}
+psql -h "${db_host}" -U "${db_user}" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '${db}'" | grep -q 1 \
+  || psql -h "${db_host}" -U "${db_user}" -d postgres -c "CREATE DATABASE ${db}"
+%{ endfor ~}
+unset PGPASSWORD
+
+# ---- pull and start (images exist only after the first CI run on main; deploy.yml retries later) ----
+aws ecr get-login-password | docker login --username AWS --password-stdin "${ecr_registry}"
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build --remove-orphans \
+  || echo "WARN: images not in ECR yet - push to ${git_branch} and let deploy.yml start the stack"

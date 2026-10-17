@@ -7,7 +7,9 @@ import com.nimbusds.jose.proc.JWSVerificationKeySelector;
 import com.nimbusds.jose.proc.SecurityContext;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.proc.ConfigurableJWTProcessor;
+import com.nimbusds.jwt.proc.DefaultJWTClaimsVerifier;
 import com.nimbusds.jwt.proc.DefaultJWTProcessor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
@@ -22,6 +24,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.net.URL;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Checks the RS256 JWT against auth-service's JWKS (NFR-02) and forwards the
@@ -42,16 +45,29 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
             "/api/v1/payments/webhook"
     );
 
+    /** Must match the issuer auth-service puts in every token. */
+    static final String ISSUER = "shopflow-auth";
+    /** Tolerated clock difference between auth-service and the gateway (nimbus default would be 60 s). */
+    static final int MAX_CLOCK_SKEW_SECONDS = 10;
+
     private final ConfigurableJWTProcessor<SecurityContext> jwtProcessor;
 
+    @Autowired   // two constructors: tell Spring which one to use
     public JwtAuthFilter(@Value("${shopflow.jwks-url:http://localhost:8081/.well-known/jwks.json}") String jwksUrl)
             throws Exception {
-        JWKSource<SecurityContext> keySource = JWKSourceBuilder
-                .create(new URL(jwksUrl))
-                .retrying(true)
-                .build();
+        // keys are fetched lazily on the first token and cached/refreshed by nimbus
+        this(JWKSourceBuilder.<SecurityContext>create(new URL(jwksUrl)).retrying(true).build());
+    }
+
+    /** Visible for tests: any key source, e.g. an in-memory JWK set. */
+    JwtAuthFilter(JWKSource<SecurityContext> keySource) {
         DefaultJWTProcessor<SecurityContext> processor = new DefaultJWTProcessor<>();
         processor.setJWSKeySelector(new JWSVerificationKeySelector<>(JWSAlgorithm.RS256, keySource));
+        // exp is enforced (with a small skew), issuer must match, sub/role must be present
+        DefaultJWTClaimsVerifier<SecurityContext> claimsVerifier = new DefaultJWTClaimsVerifier<>(
+                new JWTClaimsSet.Builder().issuer(ISSUER).build(), Set.of("sub", "exp", "role"));
+        claimsVerifier.setMaxClockSkew(MAX_CLOCK_SKEW_SECONDS);
+        processor.setJWTClaimsSetVerifier(claimsVerifier);
         this.jwtProcessor = processor;
     }
 
@@ -88,6 +104,9 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
                     } catch (java.text.ParseException e) {
                         return unauthorized(exchange);
                     }
+                    if (role == null || claims.getSubject() == null) {
+                        return unauthorized(exchange);
+                    }
                     ServerHttpRequest mutated = exchange.getRequest().mutate()
                             .headers(h -> {
                                 h.set(USER_ID_HEADER, claims.getSubject());
@@ -99,7 +118,7 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
                 .onErrorResume(invalidToken -> unauthorized(exchange));
     }
 
-    private boolean isPublic(String path, String method) {
+    static boolean isPublic(String path, String method) {
         // product browsing is public for GET only (FR-04, FR-05);
         // /api/v1/admin/products stays protected because it doesn't start
         // with /api/v1/products

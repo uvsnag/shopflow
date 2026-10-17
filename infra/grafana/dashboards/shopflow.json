@@ -1,19 +1,37 @@
 {
   "uid": "shopflow-overview",
   "title": "ShopFlow Overview",
-  "tags": ["shopflow"],
+  "tags": [
+    "shopflow"
+  ],
   "timezone": "browser",
   "schemaVersion": 39,
   "refresh": "10s",
-  "time": { "from": "now-30m", "to": "now" },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
   "panels": [
     {
       "id": 1,
       "type": "timeseries",
       "title": "Request rate (req/s) by service",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "shopflow-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "shopflow-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
       "targets": [
         {
           "refId": "A",
@@ -26,9 +44,25 @@
       "id": 2,
       "type": "timeseries",
       "title": "Error rate (5xx req/s) by service",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "shopflow-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "shopflow-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
       "targets": [
         {
           "refId": "A",
@@ -41,9 +75,22 @@
       "id": 3,
       "type": "timeseries",
       "title": "Mean response time by service",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "shopflow-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "shopflow-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
       "targets": [
         {
           "refId": "A",
@@ -55,14 +102,27 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Max response time by service",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "shopflow-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "title": "p95 response time by service",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "shopflow-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (application) (http_server_requests_seconds_max)",
+          "expr": "histogram_quantile(0.95, sum by (le, application) (rate(http_server_requests_seconds_bucket[5m])))",
           "legendFormat": "{{application}}"
         }
       ]
@@ -71,21 +131,167 @@
       "id": 5,
       "type": "stat",
       "title": "Services up",
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "shopflow-prometheus" },
-      "targets": [{ "refId": "A", "expr": "count(up{job=\"shopflow-services\"} == 1)" }]
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "shopflow-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(up{job=\"shopflow-services\"} == 1)"
+        }
+      ]
     },
     {
       "id": 6,
       "type": "timeseries",
       "title": "Kafka listener throughput (events/s)",
-      "gridPos": { "h": 6, "w": 18, "x": 6, "y": 16 },
-      "datasource": { "type": "prometheus", "uid": "shopflow-prometheus" },
-      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "gridPos": {
+        "h": 6,
+        "w": 18,
+        "x": 6,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "shopflow-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
       "targets": [
         {
           "refId": "A",
           "expr": "sum by (application) (rate(spring_kafka_listener_seconds_count[1m]))",
+          "legendFormat": "{{application}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Orders per status",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "shopflow-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (status) (shopflow_orders)",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Orders per status (now)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "shopflow-prometheus"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (status) (shopflow_orders)",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Provider circuit breaker state (payment-service)",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 30
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "shopflow-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (state) (resilience4j_circuitbreaker_state{name=\"provider\"})",
+          "legendFormat": "{{state}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Dead-letter messages (events/s)",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 30
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "shopflow-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (application) (rate(spring_kafka_template_seconds_count{topic=~\".*\\.DLT\"}[1m]))",
           "legendFormat": "{{application}}"
         }
       ]

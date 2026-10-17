@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: notification-service
+  config:
+    import: classpath:shopflow-defaults.yml   # Kafka, actuator, tracing, JSON logs
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/notification_db
     username: ${DB_USER:shopflow}
@@ -18,21 +20,5 @@ spring:
     host: ${MAIL_HOST:localhost}
     port: ${MAIL_PORT:1025}   # MailHog SMTP
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
     consumer:
       group-id: notification-service
-      auto-offset-reset: earliest
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-
-management:
-  metrics:
-    tags:
-      application: ${spring.application.name}
-  endpoints:
-    web:
-      exposure:
-        include: health,info,prometheus

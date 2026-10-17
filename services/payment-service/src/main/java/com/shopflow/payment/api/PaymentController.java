@@ -4,7 +4,6 @@ import com.shopflow.common.security.CurrentUser;
 import com.shopflow.payment.domain.Payment;
 import com.shopflow.payment.service.PaymentService;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -21,17 +20,19 @@ public class PaymentController {
         this.paymentService = paymentService;
     }
 
-    public record CreatePaymentRequest(@NotNull Long orderId, @NotNull @Min(1) Long amount) {}
+    /** Only the order id: the amount is taken from the order snapshot (ADR 0011), never from the client. */
+    public record CreatePaymentRequest(@NotNull Long orderId) {}
 
-    /** FR-08 + NFR-10. TODO: fetch the amount from order-service instead of trusting the client. */
+    /** FR-08 + NFR-10: pay for an order, idempotent on the Idempotency-Key header. */
     @PostMapping("/payments")
     @PreAuthorize("isAuthenticated()")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public Map<String, Object> pay(@RequestHeader(name = "Idempotency-Key") String idempotencyKey,
                                    @RequestBody @Valid CreatePaymentRequest req) {
-        Payment payment = paymentService.createPayment(CurrentUser.id(), req.orderId(), req.amount(), idempotencyKey);
+        Payment payment = paymentService.createPayment(CurrentUser.id(), req.orderId(), idempotencyKey);
         return Map.of("paymentId", payment.getId(),
                 "orderId", payment.getOrderId(),
+                "amount", payment.getAmount(),
                 "status", payment.getStatus().name());
     }
 
@@ -40,6 +41,6 @@ public class PaymentController {
     @PreAuthorize("hasRole('ADMIN')")
     public Map<String, Object> refund(@PathVariable Long id) {
         paymentService.refundByPaymentId(id, "admin refund");
-        return Map.of("paymentId", id, "status", "REFUNDED");
+        return Map.of("paymentId", id, "status", "REFUND_REQUESTED");
     }
 }

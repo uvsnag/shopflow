@@ -7,9 +7,17 @@ docker-compose. Log in with admin/admin at http://localhost:3001.
 - `dashboards/dashboards.yml` — file provider that loads every dashboard JSON
   in the same folder
 - `dashboards/shopflow.json` — NFR-20 dashboard: request rate, error rate,
-  response time, services up, Kafka listener throughput
+  mean and p95 response time, services up, Kafka listener throughput, orders
+  per status, provider circuit-breaker state, dead-letter traffic
 
-Still TODO for NFR-20: an "orders per status" panel needs a custom gauge
-exported from order-service (e.g. a Micrometer `MultiGauge` over
-`select status, count(*)`), and p95 panels need histogram buckets
-(`management.metrics.distribution.percentiles-histogram.http.server.requests=true`).
+Where the numbers come from:
+
+- `http_server_requests_seconds_*` — Spring Boot Actuator + Micrometer in every
+  service; p95 needs the histogram buckets enabled in `shopflow-defaults.yml`
+  (`management.metrics.distribution.percentiles-histogram.http.server.requests`).
+- `shopflow_orders{status=...}` — a Micrometer `MultiGauge` in order-service
+  (`OrderMetrics`) refreshed from `select status, count(*)` every 15 s.
+- `resilience4j_circuitbreaker_state{name="provider"}` — payment-service's
+  circuit breaker towards the fake bank (NFR-11).
+- `spring_kafka_template_seconds_count{topic=~".*\.DLT"}` — messages parked on
+  a dead letter topic after 3 failed attempts.

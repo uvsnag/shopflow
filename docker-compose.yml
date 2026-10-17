@@ -9,6 +9,8 @@ x-service-defaults: &service-defaults
     DB_PASSWORD: shopflow
     KAFKA_BOOTSTRAP: kafka:9092
     REDIS_HOST: redis
+    ZIPKIN_URL: http://zipkin:9411      # NFR-18
+    SPRING_PROFILES_ACTIVE: json-logs   # NFR-19
 
 services:
   postgres:
@@ -91,6 +93,11 @@ services:
       WEBHOOK_SECRET: local-dev-secret
     ports:
       - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   api-gateway:
     <<: *service-defaults

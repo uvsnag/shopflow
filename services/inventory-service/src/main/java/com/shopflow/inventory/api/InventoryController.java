@@ -2,6 +2,7 @@ package com.shopflow.inventory.api;
 
 import com.shopflow.inventory.domain.Stock;
 import com.shopflow.inventory.service.InventoryService;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -21,7 +22,7 @@ public class InventoryController {
     @PostMapping("/admin/inventory/{productId}/add")
     @PreAuthorize("hasRole('ADMIN')")
     public Map<String, Object> addStock(@PathVariable Long productId,
-                                        @RequestBody AddStockRequest req) {
+                                        @RequestBody @Valid AddStockRequest req) {
         Stock stock = inventoryService.addStock(productId, req.quantity());
         return Map.of("productId", stock.getProductId(),
                 "available", stock.getAvailable(),

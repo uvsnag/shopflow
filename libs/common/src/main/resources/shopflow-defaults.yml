@@ -1,0 +1,62 @@
+# Shared defaults for every Spring Boot service. Each service imports this file
+# with `spring.config.import: classpath:shopflow-defaults.yml`; anything in the
+# service's own application.yml wins over what is here.
+
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+    consumer:
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    # NFR-18: the trace id travels inside Kafka record headers, so one order's
+    # story spans REST calls and events in Zipkin.
+    template:
+      observation-enabled: true
+    listener:
+      observation-enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      # NFR-20: histogram buckets so Grafana can show p95 latency
+      percentiles-histogram:
+        http.server.requests: true
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLE_RATE:1.0}   # demo: trace everything
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_URL:http://localhost:9411}/api/v2/spans
+
+logging:
+  level:
+    com.shopflow: INFO
+
+---
+# NFR-19: JSON logs (Elastic Common Schema) including trace.id / span.id.
+# Activated by SPRING_PROFILES_ACTIVE=json-logs (docker-compose and AWS do
+# this); a developer running a service from the IDE keeps readable logs,
+# which still carry [app,traceId,spanId] thanks to Boot's correlation pattern.
+spring:
+  config:
+    activate:
+      on-profile: json-logs
+logging:
+  structured:
+    format:
+      console: ecs

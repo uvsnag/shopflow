@@ -1,0 +1,10 @@
+# Shell scripts and templates must stay LF even when checked out on Windows,
+# or they break inside the Linux containers / EC2 box that run them.
+* text=auto
+mvnw text eol=lf
+*.sh text eol=lf
+*.tftpl text eol=lf
+*.cmd text eol=crlf
+*.jar binary
+*.png binary
+*.pdf binary

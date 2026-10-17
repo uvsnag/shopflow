@@ -4,16 +4,19 @@ import com.shopflow.product.domain.Product;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
 
+/**
+ * Derived queries instead of one JPQL with "(:q IS NULL OR ...)": binding a
+ * null parameter inside LIKE/CONCAT makes PostgreSQL complain that it cannot
+ * determine the parameter type. The service picks the right method.
+ */
 public interface ProductRepository extends JpaRepository<Product, Long> {
 
-    @Query("""
-            SELECT p FROM Product p
-            WHERE p.active = true
-              AND (:q IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', :q, '%')))
-              AND (:categoryId IS NULL OR p.categoryId = :categoryId)
-            """)
-    Page<Product> search(@Param("q") String q, @Param("categoryId") Long categoryId, Pageable pageable);
+    Page<Product> findByActiveTrue(Pageable pageable);
+
+    Page<Product> findByActiveTrueAndNameContainingIgnoreCase(String q, Pageable pageable);
+
+    Page<Product> findByActiveTrueAndCategoryId(Long categoryId, Pageable pageable);
+
+    Page<Product> findByActiveTrueAndCategoryIdAndNameContainingIgnoreCase(Long categoryId, String q, Pageable pageable);
 }

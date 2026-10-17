@@ -1,0 +1,29 @@
+flowchart TB
+    FE["Next.js frontend"] --> GW["api-gateway<br/>JWT check, rate limit, routing"]
+    GW --- REDIS["Redis<br/>rate limit + cache"]
+
+    subgraph SERVICES["Services: each owns its own PostgreSQL database"]
+        AUTH["auth-service<br/>sign up, log in, JWT<br/>(auth_db)"]
+        PROD["product-service<br/>catalog, search, paging<br/>(product_db)"]
+        INV["inventory-service<br/>reserve and release stock<br/>(inventory_db)"]
+        ORD["order-service<br/>cart, orders, runs the saga<br/>(order_db)"]
+        NOTI["notification-service<br/>email and in-app messages<br/>(notification_db)"]
+        PAY["payment-service<br/>charge, webhook, refund<br/>(payment_db)"]
+    end
+
+    GW --> AUTH
+    GW --> PROD
+    GW --> INV
+    GW --> ORD
+    GW --> NOTI
+    GW --> PAY
+
+    PROD --- REDIS
+
+    KAFKA[["Apache Kafka<br/>order, inventory and payment events"]]
+    ORD <-->|events via outbox| KAFKA
+    INV <-->|events via outbox| KAFKA
+    PAY <-->|events via outbox| KAFKA
+    NOTI <-->|consume events| KAFKA
+
+    PAY <-->|HTTPS + signed webhook| BANK["fake-payment-provider<br/>pretends to be a bank"]

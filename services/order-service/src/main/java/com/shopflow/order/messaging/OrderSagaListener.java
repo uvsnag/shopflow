@@ -57,12 +57,10 @@ public class OrderSagaListener {
         }
         Long orderId = Long.valueOf(event.orderId());
         switch (event.eventType()) {
-            case EventTypes.PAYMENT_SUCCEEDED ->
-                    orderService.changeStatus(orderId, OrderStatus.PAID, "payment succeeded");
+            case EventTypes.PAYMENT_SUCCEEDED -> orderService.onPaymentSucceeded(orderId);
             case EventTypes.PAYMENT_FAILED ->
                     orderService.changeStatus(orderId, OrderStatus.CANCELLED, "payment failed");
-            case EventTypes.PAYMENT_REFUNDED ->
-                    orderService.changeStatus(orderId, OrderStatus.REFUNDED, "payment refunded");
+            case EventTypes.PAYMENT_REFUNDED -> orderService.onPaymentRefunded(orderId);
             default -> { }
         }
     }

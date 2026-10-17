@@ -9,6 +9,7 @@ import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,13 +30,26 @@ public class ProductService {
     @Cacheable(cacheNames = "products", key = "#q + ':' + #categoryId + ':' + #page + ':' + #size")
     @Transactional(readOnly = true)
     public PageResponse list(String q, Long categoryId, int page, int size) {
-        Page<Product> result = productRepository.search(
-                (q == null || q.isBlank()) ? null : q,
+        Page<Product> result = search(
+                (q == null || q.isBlank()) ? null : q.trim(),
                 categoryId,
                 PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")));
         return new PageResponse(
                 result.getContent().stream().map(ProductResponse::from).toList(),
                 result.getNumber(), result.getSize(), result.getTotalElements(), result.getTotalPages());
+    }
+
+    private Page<Product> search(String q, Long categoryId, Pageable pageable) {
+        if (q == null && categoryId == null) {
+            return productRepository.findByActiveTrue(pageable);
+        }
+        if (categoryId == null) {
+            return productRepository.findByActiveTrueAndNameContainingIgnoreCase(q, pageable);
+        }
+        if (q == null) {
+            return productRepository.findByActiveTrueAndCategoryId(categoryId, pageable);
+        }
+        return productRepository.findByActiveTrueAndCategoryIdAndNameContainingIgnoreCase(categoryId, q, pageable);
     }
 
     /** Serializable because the default Redis cache serializer is JDK serialization. */

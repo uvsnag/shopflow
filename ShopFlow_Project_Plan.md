@@ -2,7 +2,7 @@
 
 > **For AI coding agents:** This file is the single source of truth for the ShopFlow project. Follow the requirements (FR-xx, BR-xx, NFR-xx), service boundaries, data model, APIs, events, and folder structure below. Build in the order of the Roadmap. When a choice is not covered here, pick the simplest option that keeps services independent, and note it as a new ADR in `docs/adr/`.
 
-Last updated: 2026-10-16 · Author: Nguyen Van Sang
+Last updated: 2026-10-23 · Author: Nguyen Van Sang
 
 ## Overview
 

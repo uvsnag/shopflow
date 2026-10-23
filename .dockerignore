@@ -1,0 +1,22 @@
+# Context for the shared backend Dockerfile (docker build --build-arg SERVICE=<name> .).
+# Only pom.xml, libs/common and services/ are COPYed, but Docker still uploads the
+# whole directory unless it is excluded here.
+**/target
+**/node_modules
+**/.next
+frontend
+tools
+load-test
+infra
+docs
+.github
+.git
+.idea
+.vscode
+*.md
+*.pdf
+*.txt
+.env
+.env.*
+*.pem
+*.key

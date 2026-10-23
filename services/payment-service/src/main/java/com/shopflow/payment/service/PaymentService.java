@@ -88,18 +88,25 @@ public class PaymentService {
      * The amount is read from the order snapshot, never from the request.
      *
      * Deliberately NOT one big @Transactional: the payment row is committed
-     * first, so the unique constraints on idempotency_key and order_id (BR-04)
-     * reject a concurrent double click BEFORE the provider is called — not at
-     * commit time, after the bank was already charged twice. It also means the
-     * DB transaction is not held open through up to ~9s of provider retries.
+     * first, so the unique constraints on (user_id, idempotency_key) and
+     * order_id (BR-04) reject a concurrent double click BEFORE the provider is
+     * called — not at commit time, after the bank was already charged twice.
+     * It also means the DB transaction is not held open through up to ~9s of
+     * provider retries.
+     *
+     * Idempotency-Key rules (NFR-10): the key is scoped to the caller, so one
+     * user can never replay (or read) another user's payment. The lookup is a
+     * fast path only — the INSERT is the real arbiter; the loser of a race
+     * re-reads the winner's row. A key replayed with a DIFFERENT order is a
+     * client bug and is rejected instead of silently returning the old payment.
      */
     public Payment createPayment(Long userId, Long orderId, String idempotencyKey) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new BadRequestException("Idempotency-Key header is required");
         }
-        var existing = paymentRepository.findByIdempotencyKey(idempotencyKey);
+        var existing = paymentRepository.findByUserIdAndIdempotencyKey(userId, idempotencyKey);
         if (existing.isPresent()) {
-            return existing.get();
+            return sameRequest(existing.get(), orderId);
         }
 
         OrderSnapshot order = snapshotRepository.findById(orderId)
@@ -124,9 +131,10 @@ public class PaymentService {
             // repository.save runs in its own transaction and commits here
             payment = paymentRepository.save(new Payment(userId, orderId, amount, idempotencyKey));
         } catch (DataIntegrityViolationException raceLost) {
-            // a concurrent request won: same Idempotency-Key -> return its
-            // payment (NFR-10); same order, different key -> BR-04 conflict
-            return paymentRepository.findByIdempotencyKey(idempotencyKey)
+            // a concurrent request won: same user + same Idempotency-Key -> return
+            // its payment (NFR-10); same order, different key -> BR-04 conflict
+            return paymentRepository.findByUserIdAndIdempotencyKey(userId, idempotencyKey)
+                    .map(winner -> sameRequest(winner, orderId))
                     .orElseThrow(() -> new ConflictException("Order " + orderId + " already has a payment"));
         }
 
@@ -142,6 +150,14 @@ public class PaymentService {
                     .ifPresent(p -> markFailed(p, "provider unavailable")));
         }
         return paymentRepository.findById(paymentId).orElse(payment);
+    }
+
+    /** Replay is only valid for the same request: the same key with another order is rejected. */
+    private static Payment sameRequest(Payment existing, Long orderId) {
+        if (!existing.getOrderId().equals(orderId)) {
+            throw new ConflictException("Idempotency-Key was already used for order " + existing.getOrderId());
+        }
+        return existing;
     }
 
     /** Called by the webhook after the HMAC signature was verified (NFR-06). */

@@ -8,7 +8,7 @@ Last updated: 2026-10-16 · Author: Nguyen Van Sang
 
 ShopFlow is a small online shop built as 7 microservices. A customer browses products, places an order, pays, and gets a notification. The order and payment flow is the heart of the project.
 
-The goal is not a real business. The goal is to prove skills that are on the CV but not in any work project: **Microservices, System Design, Spring Security + JWT, Docker, CI/CD, and AWS**.
+The goal is not a real business. The goal is to practise and demonstrate skills that day-to-day work does not cover: **Microservices, System Design, Spring Security + JWT, Docker, CI/CD, and AWS**.
 
 **What "done" looks like:**
 
@@ -226,10 +226,10 @@ Each service has its own tables. When one service needs data from another, it sa
 | inventory | reservations | id, order_id, product_id, quantity, status (RESERVED, CONFIRMED, RELEASED), expires_at |
 | order | carts | id, user_id (unique), updated_at |
 | order | cart_items | cart_id, product_id, quantity |
-| order | orders | id, user_id, status, total_amount, currency, created_at, updated_at, version |
+| order | orders | id, user_id, status, total_amount, currency, idempotency_key (unique per user), created_at, updated_at, version |
 | order | order_items | id, order_id, product_id, product_name, unit_price, quantity |
 | order | order_status_history | id, order_id, from_status, to_status, reason, changed_at |
-| payment | payments | id, order_id (unique), amount, status (PENDING, SUCCEEDED, FAILED, REFUNDED), provider_ref, idempotency_key (unique), created_at |
+| payment | payments | id, order_id (unique), amount, status (PENDING, SUCCEEDED, FAILED, REFUNDED), provider_ref, idempotency_key (unique per user), created_at |
 | payment | refunds | id, payment_id, amount, status, created_at |
 | notification | notifications | id, user_id, type, title, body, read, created_at |
 | every service that sends events | outbox | id, aggregate_id, event_type, payload (JSONB), created_at, sent_at |
@@ -398,9 +398,9 @@ Keep `libs/common` small. If it grows too big, services become tied together aga
 | Option | What runs where | Cost | Good for |
 | --- | --- | --- | --- |
 | A. Simple | One EC2 instance running docker compose, RDS PostgreSQL free tier | Low, some free tier | Getting online fast |
-| B. Better for CV | ECS Fargate (one task per service), RDS, ElastiCache, Amazon MSK or Kafka on EC2, ALB in front | Higher | Showing real cloud skills |
+| B. Production-like | ECS Fargate (one task per service), RDS, ElastiCache, Amazon MSK or Kafka on EC2, ALB in front | Higher | Showing real cloud skills |
 
-Start with option A. Move to option B later and write an ADR about the change. That story is great for interviews.
+Start with option A. Move to option B later and write an ADR about the change.
 
 Turn off resources when you are not using them, and set an AWS Budget alert (for example 10 USD) so you never get a surprise bill. The frontend can go on Vercel or S3 + CloudFront.
 
@@ -443,7 +443,7 @@ Write each one as a short file in `docs/adr/`. Each ADR has 4 parts: **Context**
 | 0009 | Kafka over RabbitMQ | Heavier to run vs. replay, ordering by key, common in job posts |
 | 0010 | Start on EC2, move to ECS Fargate | Cheap and fast first vs. a real cloud setup later |
 
-If you change your mind later, don't delete the old ADR. Mark it "Replaced by 00XX". Interviewers like to see how your thinking changed.
+If you change your mind later, don't delete the old ADR. Mark it "Replaced by 00XX". The history shows how the thinking changed.
 
 ## Roadmap
 
@@ -465,5 +465,3 @@ About 10–12 weeks if you work 8–10 hours a week. Each phase ends with someth
    - Done when: a stranger can understand the project from the README alone.
 
 **After that (optional):** move to ECS Fargate, add an AI feature (for example "find my orders from last week that are not delivered" in plain words), or add a real payment sandbox (Stripe test mode or VNPay sandbox).
-
-**For your CV:** once phase 4 is done, you can already add the project. Write it like your work projects: what you built, the tech stack, and one or two numbers (for example "0 oversells and 0 double charges in a 100-user k6 load test").

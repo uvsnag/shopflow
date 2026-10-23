@@ -18,6 +18,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.stereotype.Component;
+import org.springframework.web.cors.reactive.CorsUtils;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -73,6 +74,13 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+        // A CORS preflight (OPTIONS + Origin + Access-Control-Request-Method) never carries
+        // the Authorization header, so it must not be answered with 401. The globalcors
+        // config normally handles it before any route filter runs; this is the safety net.
+        if (CorsUtils.isPreFlightRequest(exchange.getRequest())) {
+            return chain.filter(exchange);
+        }
+
         String path = exchange.getRequest().getPath().value();
         String method = exchange.getRequest().getMethod() != null
                 ? exchange.getRequest().getMethod().name() : "GET";

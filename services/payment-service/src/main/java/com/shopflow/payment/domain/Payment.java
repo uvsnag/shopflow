@@ -9,7 +9,8 @@ import java.time.Instant;
  * for the same order.
  */
 @Entity
-@Table(name = "payments")
+@Table(name = "payments", uniqueConstraints =
+        @UniqueConstraint(name = "uk_payments_user_idempotency_key", columnNames = {"user_id", "idempotency_key"}))
 public class Payment {
 
     public enum Status { PENDING, SUCCEEDED, FAILED, REFUNDED }
@@ -36,8 +37,8 @@ public class Payment {
     @Column(name = "provider_ref")
     private String providerRef;
 
-    /** NFR-10: pressing "Pay" twice with the same key charges once. */
-    @Column(name = "idempotency_key", unique = true, nullable = false)
+    /** NFR-10: pressing "Pay" twice with the same key charges once; unique per user (V3). */
+    @Column(name = "idempotency_key", nullable = false)
     private String idempotencyKey;
 
     @Column(name = "created_at", nullable = false)

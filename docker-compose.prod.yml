@@ -46,7 +46,10 @@ services:
   api-gateway:
     image: ${ECR_REGISTRY}/shopflow/api-gateway:${IMAGE_TAG:-latest}
     pull_policy: always
-    environment: *prod-env
+    environment:
+      <<: *prod-env
+      # the browser loads the frontend from http://DEMO_HOST:3000 and calls the gateway on :8080
+      CORS_ALLOWED_ORIGINS: http://${DEMO_HOST}:3000,http://localhost:3000
     depends_on: !override
       redis: { condition: service_healthy }
       auth-service: { condition: service_started }

@@ -13,8 +13,10 @@ import com.shopflow.order.repository.OrderRepository;
 import com.shopflow.order.repository.OrderStatusHistoryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -29,34 +31,51 @@ public class OrderService {
     private final CartService cartService;
     private final ProductClient productClient;
     private final OutboxService outbox;
+    private final TransactionTemplate tx;
 
     public OrderService(OrderRepository orderRepository,
                         OrderStatusHistoryRepository historyRepository,
                         CartService cartService,
                         ProductClient productClient,
-                        OutboxService outbox) {
+                        OutboxService outbox,
+                        TransactionTemplate tx) {
         this.orderRepository = orderRepository;
         this.historyRepository = historyRepository;
         this.cartService = cartService;
         this.productClient = productClient;
         this.outbox = outbox;
+        this.tx = tx;
     }
 
     /**
      * FR-07: place an order from the cart. Saga step 1: save order PENDING and
-     * OrderCreated in the outbox in one transaction (NFR-08). The same
-     * Idempotency-Key returns the same order instead of a new one (NFR-10).
+     * OrderCreated in the outbox in one transaction (NFR-08). The same user
+     * sending the same Idempotency-Key gets the same order back (NFR-10).
+     *
+     * Concurrency: the lookup below is only a fast path. Two requests with the
+     * same key can both miss it; the unique (user_id, idempotency_key)
+     * constraint then lets exactly one INSERT commit. The loser's transaction
+     * is rolled back as a whole (no order, no cart clear, no outbox row) and,
+     * because the failure is caught OUTSIDE that transaction, it re-reads the
+     * winner's order and returns it — same response as the fast path, no 409.
      */
-    @Transactional
     public Order placeOrder(Long userId, String idempotencyKey) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new BadRequestException("Idempotency-Key header is required");
         }
-        var existing = orderRepository.findByIdempotencyKey(idempotencyKey);
+        var existing = orderRepository.findByUserIdAndIdempotencyKey(userId, idempotencyKey);
         if (existing.isPresent()) {
             return existing.get();
         }
+        try {
+            return tx.execute(status -> createOrder(userId, idempotencyKey));
+        } catch (DataIntegrityViolationException raceLost) {
+            return orderRepository.findByUserIdAndIdempotencyKey(userId, idempotencyKey)
+                    .orElseThrow(() -> raceLost); // some other constraint: surfaces as 409
+        }
+    }
 
+    private Order createOrder(Long userId, String idempotencyKey) {
         Cart cart = cartService.getOrCreate(userId);
         if (cart.getItems().isEmpty()) {
             throw new BadRequestException("Cart is empty");

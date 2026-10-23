@@ -1,0 +1,16 @@
+# Keep the build context small and never ship host artefacts into the image:
+# node_modules holds Windows/macOS native binaries (npm ci rebuilds for Linux),
+# .next is rebuilt by `npm run build`, and .env* must never end up in a layer.
+node_modules
+.next
+out
+dist
+.env
+.env.*
+npm-debug.log*
+tsconfig.tsbuildinfo
+Dockerfile
+.dockerignore
+.git
+.gitignore
+*.md

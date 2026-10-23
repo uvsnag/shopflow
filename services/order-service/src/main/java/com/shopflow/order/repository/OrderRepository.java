@@ -15,7 +15,8 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     Page<Order> findByUserIdOrderByCreatedAtDesc(Long userId, Pageable pageable);
 
-    Optional<Order> findByIdempotencyKey(String idempotencyKey);
+    /** NFR-10: the key is scoped to the user (unique (user_id, idempotency_key)). */
+    Optional<Order> findByUserIdAndIdempotencyKey(Long userId, String idempotencyKey);
 
     Page<Order> findByStatusOrderByCreatedAtDesc(OrderStatus status, Pageable pageable);
 

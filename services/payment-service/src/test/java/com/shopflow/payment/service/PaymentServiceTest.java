@@ -79,7 +79,7 @@ class PaymentServiceTest {
     @Test
     void sameKeyReplaysTheSamePaymentWithoutChargingAgain() {
         Payment existing = new Payment(1L, 42L, 100L, "k");
-        when(paymentRepository.findByIdempotencyKey("k")).thenReturn(Optional.of(existing));
+        when(paymentRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.of(existing));
 
         assertSame(existing, service.createPayment(1L, 42L, "k"));
 
@@ -87,8 +87,26 @@ class PaymentServiceTest {
     }
 
     @Test
+    void sameKeyWithAnotherOrderIsRejected() {
+        when(paymentRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.of(new Payment(1L, 42L, 100L, "k")));
+
+        assertThrows(ConflictException.class, () -> service.createPayment(1L, 43L, "k"));
+        verifyNoInteractions(provider);
+    }
+
+    @Test
+    void anotherUsersKeyDoesNotReplayTheirPayment() {
+        // the lookup is scoped by user: user 2 sending user 1's key is a fresh request
+        when(paymentRepository.findByUserIdAndIdempotencyKey(2L, "k")).thenReturn(Optional.empty());
+        when(snapshotRepository.findById(42L)).thenReturn(Optional.of(reservedOrder(1L, 100L)));
+
+        assertThrows(NotFoundException.class, () -> service.createPayment(2L, 42L, "k"));
+        verify(paymentRepository, never()).findByUserIdAndIdempotencyKey(1L, "k");
+    }
+
+    @Test
     void unknownOrderIsNotReadyYet() {
-        when(paymentRepository.findByIdempotencyKey("k")).thenReturn(Optional.empty());
+        when(paymentRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
         when(snapshotRepository.findById(42L)).thenReturn(Optional.empty());
 
         assertThrows(ConflictException.class, () -> service.createPayment(1L, 42L, "k"));
@@ -96,7 +114,7 @@ class PaymentServiceTest {
 
     @Test
     void someoneElsesOrderLooksNonexistent() {
-        when(paymentRepository.findByIdempotencyKey("k")).thenReturn(Optional.empty());
+        when(paymentRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
         when(snapshotRepository.findById(42L)).thenReturn(Optional.of(reservedOrder(7L, 100L)));
 
         assertThrows(NotFoundException.class, () -> service.createPayment(1L, 42L, "k"));
@@ -104,7 +122,7 @@ class PaymentServiceTest {
 
     @Test
     void cancelledOrUnreservedOrdersCannotBePaid() {
-        when(paymentRepository.findByIdempotencyKey("k")).thenReturn(Optional.empty());
+        when(paymentRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
         OrderSnapshot cancelled = new OrderSnapshot(42L, 1L, 100L, OrderSnapshot.Status.CANCELLED);
         OrderSnapshot created = new OrderSnapshot(42L, 1L, 100L, OrderSnapshot.Status.CREATED);
         when(snapshotRepository.findById(42L)).thenReturn(Optional.of(cancelled), Optional.of(created));
@@ -116,7 +134,7 @@ class PaymentServiceTest {
 
     @Test
     void secondPaymentForTheSameOrderIsRejected() {
-        when(paymentRepository.findByIdempotencyKey("k2")).thenReturn(Optional.empty());
+        when(paymentRepository.findByUserIdAndIdempotencyKey(1L, "k2")).thenReturn(Optional.empty());
         when(snapshotRepository.findById(42L)).thenReturn(Optional.of(reservedOrder(1L, 100L)));
         when(paymentRepository.findByOrderId(42L)).thenReturn(Optional.of(new Payment(1L, 42L, 100L, "k1")));
 
@@ -126,7 +144,7 @@ class PaymentServiceTest {
 
     @Test
     void amountComesFromTheSnapshotAndRowIsCommittedBeforeCharging() {
-        when(paymentRepository.findByIdempotencyKey("k")).thenReturn(Optional.empty());
+        when(paymentRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
         when(snapshotRepository.findById(42L)).thenReturn(Optional.of(reservedOrder(1L, 250_000L)));
         when(paymentRepository.findByOrderId(42L)).thenReturn(Optional.empty());
         when(provider.charge(500L, 42L, 250_000L)).thenReturn(new FakeProviderClient.ChargeResponse("bank_1", "PROCESSING"));
@@ -146,7 +164,7 @@ class PaymentServiceTest {
 
     @Test
     void providerOutageMarksPaymentFailedAndEmitsEvent() {
-        when(paymentRepository.findByIdempotencyKey("k")).thenReturn(Optional.empty());
+        when(paymentRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
         when(snapshotRepository.findById(42L)).thenReturn(Optional.of(reservedOrder(1L, 100L)));
         when(paymentRepository.findByOrderId(42L)).thenReturn(Optional.empty());
         when(provider.charge(anyLong(), anyLong(), anyLong())).thenThrow(new RuntimeException("circuit open"));
@@ -166,7 +184,7 @@ class PaymentServiceTest {
     @Test
     void losingTheInsertRaceReturnsTheWinnersPayment() {
         Payment winner = new Payment(1L, 42L, 100L, "k");
-        when(paymentRepository.findByIdempotencyKey("k")).thenReturn(Optional.empty(), Optional.of(winner));
+        when(paymentRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty(), Optional.of(winner));
         when(snapshotRepository.findById(42L)).thenReturn(Optional.of(reservedOrder(1L, 100L)));
         when(paymentRepository.findByOrderId(42L)).thenReturn(Optional.empty());
         when(paymentRepository.save(any(Payment.class))).thenThrow(new DataIntegrityViolationException("dup"));

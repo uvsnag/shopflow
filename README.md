@@ -47,6 +47,11 @@ Then:
 
 Seeded admin login: `admin@shopflow.local` / `admin1234` (dev only).
 
+The browser calls the gateway from another origin, so the gateway answers CORS for
+`CORS_ALLOWED_ORIGINS` (comma-separated; default `http://localhost:3000`, the
+production compose file sets `http://<DEMO_HOST>:3000`). If you serve the frontend
+from a different host or port, add it there.
+
 ## Build and test without Docker
 
 ```bash

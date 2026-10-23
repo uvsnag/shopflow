@@ -1,13 +1,17 @@
 package com.shopflow.order.domain;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.Fetch;
+import org.hibernate.annotations.FetchMode;
 
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
+/** NFR-10: an Idempotency-Key is unique per user (V2), so one user can never replay another's order. */
 @Entity
-@Table(name = "orders")
+@Table(name = "orders", uniqueConstraints =
+        @UniqueConstraint(name = "uk_orders_user_idempotency_key", columnNames = {"user_id", "idempotency_key"}))
 public class Order {
 
     @Id
@@ -28,8 +32,8 @@ public class Order {
     @Column(nullable = false)
     private String currency = "VND";
 
-    /** NFR-10: same Idempotency-Key -> same order, enforced by a unique index. */
-    @Column(name = "idempotency_key", unique = true)
+    /** NFR-10: same user + same Idempotency-Key -> same order, enforced by the unique constraint above. */
+    @Column(name = "idempotency_key")
     private String idempotencyKey;
 
     @Column(name = "created_at", nullable = false)
@@ -41,7 +45,13 @@ public class Order {
     @Version
     private long version;
 
-    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
+    /**
+     * Items are part of every API response and open-in-view is off, so they are
+     * loaded with the order (one extra SUBSELECT per query, not one per order).
+     * Lazy items would throw LazyInitializationException in the controllers.
+     */
+    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
+    @Fetch(FetchMode.SUBSELECT)
     private List<OrderItem> items = new ArrayList<>();
 
     protected Order() {

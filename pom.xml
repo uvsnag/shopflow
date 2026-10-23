@@ -46,6 +46,18 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- Must be imported BEFORE spring-cloud-dependencies: the first BOM that manages a
+                 coordinate wins. Spring Cloud's circuitbreaker BOM pins the Resilience4j modules
+                 (core, retry, spring6, ...) to 2.2.0; pinning only resilience4j-spring-boot3 to
+                 2.3.0 mixed the two and payment-service died at startup with
+                 ClassNotFoundException: RxJava3FallbackDecorator. -->
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-bom</artifactId>
+                <version>${resilience4j.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>org.springframework.cloud</groupId>
                 <artifactId>spring-cloud-dependencies</artifactId>
@@ -64,11 +76,6 @@
                 <groupId>com.nimbusds</groupId>
                 <artifactId>nimbus-jose-jwt</artifactId>
                 <version>${nimbus-jose.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.github.resilience4j</groupId>
-                <artifactId>resilience4j-spring-boot3</artifactId>
-                <version>${resilience4j.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.shopflow</groupId>
@@ -92,10 +99,22 @@
                         <parameters>true</parameters>
                     </configuration>
                 </plugin>
+                <!-- Without spring-boot-starter-parent the repackage goal is NOT bound by default, so
+                     `mvn package` produced a plain thin jar and `java -jar app.jar` in the image failed
+                     ("no main manifest attribute"). Every service declares this plugin and inherits the
+                     execution; libs/common does not declare it and stays a normal library jar. -->
                 <plugin>
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-maven-plugin</artifactId>
                     <version>${spring-boot.version}</version>
+                    <executions>
+                        <execution>
+                            <id>repackage</id>
+                            <goals>
+                                <goal>repackage</goal>
+                            </goals>
+                        </execution>
+                    </executions>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
@@ -106,6 +125,11 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-failsafe-plugin</artifactId>
                     <version>${surefire.version}</version>
+                    <!-- failsafe runs after package; point it at target/classes instead of the
+                         repackaged (BOOT-INF layout) jar, exactly as spring-boot-starter-parent does. -->
+                    <configuration>
+                        <classesDirectory>${project.build.outputDirectory}</classesDirectory>
+                    </configuration>
                 </plugin>
                 <plugin>
                     <groupId>org.jacoco</groupId>

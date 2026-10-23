@@ -24,7 +24,7 @@ This file is the short version for someone reading the code. Diagrams are in
   reserved?, ADR 0011) and notification-service's `user_contacts` (e-mail
   from `UserRegistered`).
 
-## Reliability model (the part interviews ask about)
+## Reliability model
 
 - **Atomic consume**: every Kafka listener is `@Transactional`. The
   `processed_events` insert, the business change, and any outbox event
@@ -37,9 +37,19 @@ This file is the short version for someone reading the code. Diagrams are in
 - **Races**: concurrent "buy the last item" is settled by `stock.version`
   (optimistic locking) — the losing transaction rolls back completely and
   the redelivery sees fresh stock. Concurrent double-pay is settled by the
-  DB: the payment row (unique `idempotency_key` AND unique `order_id`) is
-  committed BEFORE the provider is charged. Unique-key and version
+  DB: the payment row (unique `(user_id, idempotency_key)` AND unique
+  `order_id`) is committed BEFORE the provider is charged. Version
   conflicts surface to clients as a 409, never a 500.
+- **Idempotency keys are insert-first, never check-then-insert**: a
+  `SELECT` before the `INSERT` is only a fast path, because two requests can
+  both miss it. The unique constraint is the arbiter: the loser of the race
+  catches the violation *outside* its transaction, re-reads the winner's row
+  and returns it, so a retried `POST /orders` or `POST /payments` gets the
+  same response, not a 409. Keys are scoped per user, so one user can never
+  replay or read another user's order/payment, and a key reused with a
+  different order is rejected. `processed_events` uses one
+  `INSERT ... ON CONFLICT DO NOTHING` (0 rows = duplicate) inside the
+  listener's transaction: no race window and no aborted transaction.
 - **Pay only what is reserved**: payment-service accepts a payment only
   when its order snapshot says the order belongs to the caller and stock is
   `RESERVED`; the amount is the snapshot's, never the request's.

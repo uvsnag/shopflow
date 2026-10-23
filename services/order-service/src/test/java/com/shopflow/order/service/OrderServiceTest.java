@@ -19,7 +19,10 @@ import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Map;
 import java.util.Optional;
@@ -36,6 +39,7 @@ class OrderServiceTest {
     @Mock CartService cartService;
     @Mock ProductClient productClient;
     @Mock OutboxService outbox;
+    @Mock TransactionTemplate tx;
     @InjectMocks OrderService service;
 
     @Captor ArgumentCaptor<Map<String, Object>> payload;
@@ -47,18 +51,47 @@ class OrderServiceTest {
         order = new Order(1L, "key-1");
         order.addItem(10L, "Mouse", 250_000L, 1);
         ReflectionTestUtils.setField(order, "id", 100L);
+        // run the "new order" transaction body inline
+        lenient().when(tx.execute(any())).thenAnswer(inv -> inv.getArgument(0, TransactionCallback.class).doInTransaction(null));
     }
 
     // ---- FR-07 / NFR-10
 
     @Test
     void sameIdempotencyKeyReturnsTheSameOrder() {
-        when(orderRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.of(order));
+        when(orderRepository.findByUserIdAndIdempotencyKey(1L, "key-1")).thenReturn(Optional.of(order));
 
         assertSame(order, service.placeOrder(1L, "key-1"));
 
         verifyNoInteractions(productClient, outbox);
         verify(orderRepository, never()).save(any());
+    }
+
+    @Test
+    void anotherUsersKeyDoesNotReplayTheirOrder() {
+        // the lookup is scoped by user: user 2 with user 1's key starts a normal (empty-cart) flow
+        when(orderRepository.findByUserIdAndIdempotencyKey(2L, "key-1")).thenReturn(Optional.empty());
+        when(cartService.getOrCreate(2L)).thenReturn(new Cart(2L));
+
+        assertThrows(BadRequestException.class, () -> service.placeOrder(2L, "key-1"));
+        verify(orderRepository, never()).findByUserIdAndIdempotencyKey(1L, "key-1");
+    }
+
+    @Test
+    void losingTheInsertRaceReturnsTheWinnersOrder() {
+        Cart cart = new Cart(1L);
+        cart.putItem(10L, 2);
+        // first lookup misses (both requests passed the fast path), second finds the winner
+        when(orderRepository.findByUserIdAndIdempotencyKey(1L, "key-1"))
+                .thenReturn(Optional.empty(), Optional.of(order));
+        when(cartService.getOrCreate(1L)).thenReturn(cart);
+        when(productClient.getProduct(10L)).thenReturn(new ProductClient.ProductInfo(10L, "Mouse", 250_000L, true));
+        when(orderRepository.save(any(Order.class))).thenThrow(new DataIntegrityViolationException("uk_orders_user_idempotency_key"));
+
+        assertSame(order, service.placeOrder(1L, "key-1"));
+
+        verify(outbox, never()).append(any(), any(), any(), any());
+        verify(historyRepository, never()).save(any());
     }
 
     @Test
@@ -68,7 +101,7 @@ class OrderServiceTest {
 
     @Test
     void emptyCartIsRejected() {
-        when(orderRepository.findByIdempotencyKey("k")).thenReturn(Optional.empty());
+        when(orderRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
         when(cartService.getOrCreate(1L)).thenReturn(new Cart(1L));
 
         assertThrows(BadRequestException.class, () -> service.placeOrder(1L, "k"));
@@ -78,7 +111,7 @@ class OrderServiceTest {
     void placeOrderFreezesPriceClearsCartAndEmitsOrderCreated() {
         Cart cart = new Cart(1L);
         cart.putItem(10L, 2);
-        when(orderRepository.findByIdempotencyKey("k")).thenReturn(Optional.empty());
+        when(orderRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
         when(cartService.getOrCreate(1L)).thenReturn(cart);
         when(productClient.getProduct(10L)).thenReturn(new ProductClient.ProductInfo(10L, "Mouse", 250_000L, true));
         when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
@@ -104,7 +137,7 @@ class OrderServiceTest {
     void hiddenProductCannotBeOrdered() {
         Cart cart = new Cart(1L);
         cart.putItem(10L, 1);
-        when(orderRepository.findByIdempotencyKey("k")).thenReturn(Optional.empty());
+        when(orderRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
         when(cartService.getOrCreate(1L)).thenReturn(cart);
         when(productClient.getProduct(10L)).thenReturn(new ProductClient.ProductInfo(10L, "Mouse", 1L, false));
 

@@ -114,6 +114,7 @@ services:
       NOTIFICATION_URL: http://notification-service:8086
       JWKS_URL: http://auth-service:8081/.well-known/jwks.json
       SERVER_PORT: "8080"
+      CORS_ALLOWED_ORIGINS: http://localhost:3000   # the Next.js dev server / frontend container
     ports:
       - "8080:8080"
     depends_on:

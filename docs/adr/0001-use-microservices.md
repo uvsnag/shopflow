@@ -4,7 +4,7 @@ Status: Accepted · Date: 2026-10-16
 
 ## Context
 
-ShopFlow is a CV project meant to prove microservices and system design
+ShopFlow is a portfolio project meant to demonstrate microservices and system design
 skills. A monolith would be simpler but would not prove the skill.
 
 ## Options

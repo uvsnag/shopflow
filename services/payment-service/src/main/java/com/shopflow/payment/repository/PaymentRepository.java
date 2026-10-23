@@ -9,7 +9,8 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
 
     Optional<Payment> findByOrderId(Long orderId);
 
-    Optional<Payment> findByIdempotencyKey(String idempotencyKey);
+    /** NFR-10: the key is scoped to the user (unique (user_id, idempotency_key)). */
+    Optional<Payment> findByUserIdAndIdempotencyKey(Long userId, String idempotencyKey);
 
     Optional<Payment> findByProviderRef(String providerRef);
 }

@@ -4,7 +4,7 @@ Status: Accepted · Date: 2026-10-17
 
 ## Context
 
-The demo must run on AWS (CV requirement) on a hobby budget. Options range
+The demo must run on AWS (project requirement) on a hobby budget. Options range
 from "compose on a VM" to a full ECS/MSK/ElastiCache setup that costs real
 money every month.
 
@@ -18,7 +18,7 @@ money every month.
 ## Decision
 
 Option 1 now, option 2 as a planned second step (this ADR gets superseded
-then — keep both, the migration story is interview gold). EKS is overkill
+then — keep both, the migration is documented as an ADR). EKS is overkill
 for 7 small services and triple the cost. Non-negotiables from day one:
 images in ECR tagged by commit SHA, deploy via GitHub Actions with OIDC (no
 stored AWS keys), an AWS Budget alert (~10 USD), and secrets in

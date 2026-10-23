@@ -5,7 +5,7 @@ Status: Accepted · Date: 2026-10-17
 ## Context
 
 7 services + a shared lib + frontend + infra could live in one repo or ten.
-One developer maintains all of it, and reviewers (interviewers) need to see
+One developer maintains all of it, and reviewers need to see
 everything quickly.
 
 ## Options

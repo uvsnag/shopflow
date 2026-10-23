@@ -109,6 +109,16 @@ class JwtAuthFilterTest {
     }
 
     @Test
+    void corsPreflightOnProtectedPathIsNotRejected() {
+        ServerWebExchange seen = run(MockServerHttpRequest.options("/api/v1/orders")
+                .header("Origin", "http://localhost:3000")
+                .header("Access-Control-Request-Method", "POST")
+                .build());
+
+        assertNotNull(seen, "preflight must reach the CORS handler, not get a 401");
+    }
+
+    @Test
     void publicPathTable() {
         assertTrue(JwtAuthFilter.isPublic("/api/v1/products", "GET"));
         assertTrue(JwtAuthFilter.isPublic("/api/v1/inventory/3", "GET"));

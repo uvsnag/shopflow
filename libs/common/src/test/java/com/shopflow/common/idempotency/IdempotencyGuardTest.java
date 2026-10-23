@@ -1,16 +1,14 @@
 package com.shopflow.common.idempotency;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
-/** NFR-09: the same eventId is processed once. */
+/** NFR-09: the same eventId is processed once, decided by one atomic insert. */
 class IdempotencyGuardTest {
 
     private final ProcessedEventRepository repository = mock(ProcessedEventRepository.class);
@@ -18,24 +16,23 @@ class IdempotencyGuardTest {
     private final UUID eventId = UUID.randomUUID();
 
     @Test
-    void firstDeliveryIsProcessed() {
-        when(repository.existsById(eventId)).thenReturn(false);
+    void firstDeliveryClaimsTheIdAndIsProcessed() {
+        when(repository.insertIfAbsent(eventId)).thenReturn(1);
         assertTrue(guard.markProcessed(eventId));
-        verify(repository).saveAndFlush(any(ProcessedEvent.class));
     }
 
     @Test
     void secondDeliveryIsSkipped() {
-        when(repository.existsById(eventId)).thenReturn(true);
+        when(repository.insertIfAbsent(eventId)).thenReturn(0);
         assertFalse(guard.markProcessed(eventId));
-        verify(repository, never()).saveAndFlush(any());
     }
 
     @Test
-    void losingTheInsertRaceCountsAsDuplicate() {
-        when(repository.existsById(eventId)).thenReturn(false);
-        when(repository.saveAndFlush(any(ProcessedEvent.class)))
-                .thenThrow(new DataIntegrityViolationException("duplicate key"));
-        assertFalse(guard.markProcessed(eventId));
+    void noReadBeforeWrite() {
+        when(repository.insertIfAbsent(eventId)).thenReturn(1);
+        guard.markProcessed(eventId);
+        verify(repository, never()).existsById(any());
+        verify(repository, never()).findById(any());
+        verify(repository, only()).insertIfAbsent(eventId);
     }
 }

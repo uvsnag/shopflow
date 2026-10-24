@@ -7,7 +7,6 @@ import com.shopflow.common.event.EventEnvelope;
 import com.shopflow.common.event.EventMapper;
 import com.shopflow.common.event.EventTypes;
 import com.shopflow.common.idempotency.IdempotencyGuard;
-import com.shopflow.order.domain.OrderStatus;
 import com.shopflow.order.service.OrderService;
 import org.junit.jupiter.api.Test;
 
@@ -27,12 +26,14 @@ class OrderSagaListenerTest {
             new OrderSagaListener(new EventMapper(objectMapper), guard, orderService);
 
     @Test
-    void stockReservedMovesTheOrder() throws Exception {
+    void inventoryEventsAreRouted() throws Exception {
         when(guard.markProcessed(any())).thenReturn(true);
 
         listener.onInventoryEvent(json(EventTypes.STOCK_RESERVED, "42"));
+        listener.onInventoryEvent(json(EventTypes.STOCK_RESERVATION_FAILED, "43"));
 
-        verify(orderService).changeStatus(42L, OrderStatus.STOCK_RESERVED, "stock reserved");
+        verify(orderService).onStockReserved(42L);
+        verify(orderService).onStockReservationFailed(43L);
     }
 
     @Test
@@ -53,7 +54,7 @@ class OrderSagaListenerTest {
         listener.onPaymentEvent(json(EventTypes.PAYMENT_FAILED, "1"));
         listener.onPaymentEvent(json(EventTypes.PAYMENT_REFUNDED, "2"));
 
-        verify(orderService).changeStatus(1L, OrderStatus.CANCELLED, "payment failed");
+        verify(orderService).onPaymentFailed(1L);
         verify(orderService).onPaymentRefunded(2L);
     }
 

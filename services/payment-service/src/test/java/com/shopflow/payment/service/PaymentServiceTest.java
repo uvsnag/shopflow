@@ -19,7 +19,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
-import org.springframework.transaction.support.TransactionCallbackWithoutResult;
+import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-/** BR-04 (never charged twice), NFR-10 (Idempotency-Key), ADR 0011 (amount from snapshot), refund retry. */
+/** BR-04 (never charged twice), NFR-10 (Idempotency-Key), ADR 0011 (amount from snapshot), refund queue. */
 @ExtendWith(MockitoExtension.class)
 class PaymentServiceTest {
 
@@ -44,29 +44,35 @@ class PaymentServiceTest {
 
     PaymentService service;
 
+    private Payment saved;
+
     @BeforeEach
     void setUp() {
         service = new PaymentService(paymentRepository, refundRepository, snapshotRepository, provider, outbox, tx, 3);
+        // run transaction bodies inline
         lenient().doAnswer(inv -> {
             inv.getArgument(0, Consumer.class).accept(null);
             return null;
         }).when(tx).executeWithoutResult(any(Consumer.class));
-        lenient().when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> {
-            Payment p = inv.getArgument(0);
-            ReflectionTestUtils.setField(p, "id", 500L);
-            return p;
-        });
+        lenient().when(tx.execute(any())).thenAnswer(inv -> inv.getArgument(0, TransactionCallback.class).doInTransaction(null));
         lenient().when(paymentRepository.findById(500L)).thenAnswer(inv -> Optional.ofNullable(saved));
-        lenient().doAnswer(inv -> { saved = inv.getArgument(0); saved = paymentRepository.save(saved); return saved; })
-                .when(paymentRepository).saveAndFlush(any());
+        lenient().when(paymentRepository.lockById(500L)).thenAnswer(inv -> Optional.ofNullable(saved));
     }
 
-    private Payment saved;
-
     private OrderSnapshot reservedOrder(long userId, long amount) {
-        OrderSnapshot s = new OrderSnapshot(42L, userId, amount, OrderSnapshot.Status.CREATED);
-        s.markReserved();
-        return s;
+        return new OrderSnapshot(42L, userId, amount, OrderSnapshot.Status.RESERVED);
+    }
+
+    /** Happy-path preconditions for createPayment(1, 42, "k"); the saved row gets id 500. */
+    private void readyToPay(long amount) {
+        when(paymentRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
+        when(snapshotRepository.findById(42L)).thenReturn(Optional.of(reservedOrder(1L, amount)));
+        when(paymentRepository.findByOrderId(42L)).thenReturn(Optional.empty());
+        when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> {
+            saved = inv.getArgument(0);
+            ReflectionTestUtils.setField(saved, "id", 500L);
+            return saved;
+        });
     }
 
     // ---- createPayment
@@ -144,15 +150,8 @@ class PaymentServiceTest {
 
     @Test
     void amountComesFromTheSnapshotAndRowIsCommittedBeforeCharging() {
-        when(paymentRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
-        when(snapshotRepository.findById(42L)).thenReturn(Optional.of(reservedOrder(1L, 250_000L)));
-        when(paymentRepository.findByOrderId(42L)).thenReturn(Optional.empty());
+        readyToPay(250_000L);
         when(provider.charge(500L, 42L, 250_000L)).thenReturn(new FakeProviderClient.ChargeResponse("bank_1", "PROCESSING"));
-        when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> {
-            saved = inv.getArgument(0);
-            ReflectionTestUtils.setField(saved, "id", 500L);
-            return saved;
-        });
 
         Payment payment = service.createPayment(1L, 42L, "k");
 
@@ -164,15 +163,8 @@ class PaymentServiceTest {
 
     @Test
     void providerOutageMarksPaymentFailedAndEmitsEvent() {
-        when(paymentRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
-        when(snapshotRepository.findById(42L)).thenReturn(Optional.of(reservedOrder(1L, 100L)));
-        when(paymentRepository.findByOrderId(42L)).thenReturn(Optional.empty());
+        readyToPay(100L);
         when(provider.charge(anyLong(), anyLong(), anyLong())).thenThrow(new RuntimeException("circuit open"));
-        when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> {
-            saved = inv.getArgument(0);
-            ReflectionTestUtils.setField(saved, "id", 500L);
-            return saved;
-        });
 
         Payment payment = service.createPayment(1L, 42L, "k");
 
@@ -193,13 +185,46 @@ class PaymentServiceTest {
         verifyNoInteractions(provider);
     }
 
+    @Test
+    void webhookThatAlreadySettledIsNotOverwrittenByThePostChargeUpdate() {
+        readyToPay(100L);
+        // the webhook lands while charge() is still returning
+        when(provider.charge(500L, 42L, 100L)).thenAnswer(inv -> {
+            service.handleProviderResult(500L, "bank_1", true);
+            return new FakeProviderClient.ChargeResponse("bank_1", "PROCESSING");
+        });
+
+        Payment payment = service.createPayment(1L, 42L, "k");
+
+        assertEquals(Payment.Status.SUCCEEDED, payment.getStatus());
+        verify(paymentRepository, atLeast(2)).lockById(500L); // both writers went through the row lock
+    }
+
+    @Test
+    void providerTimeoutDoesNotFailAPaymentTheWebhookAlreadySettled() {
+        readyToPay(100L);
+        when(provider.charge(500L, 42L, 100L)).thenAnswer(inv -> {
+            service.handleProviderResult(500L, "bank_1", true);
+            throw new RuntimeException("read timeout");
+        });
+
+        assertEquals(Payment.Status.SUCCEEDED, service.createPayment(1L, 42L, "k").getStatus());
+        verify(outbox, never()).append(any(), any(), eq(EventTypes.PAYMENT_FAILED), any());
+    }
+
     // ---- webhook
+
+    private Payment payment(Payment.Status status) {
+        Payment payment = new Payment(1L, 42L, 100L, "k");
+        ReflectionTestUtils.setField(payment, "id", 500L);
+        ReflectionTestUtils.setField(payment, "status", status);
+        return payment;
+    }
 
     @Test
     void webhookSettlesOnceAndEmitsPaymentSucceeded() {
-        Payment payment = new Payment(1L, 42L, 100L, "k");
-        ReflectionTestUtils.setField(payment, "id", 500L);
-        when(paymentRepository.findById(500L)).thenReturn(Optional.of(payment));
+        Payment payment = payment(Payment.Status.PENDING);
+        when(paymentRepository.lockById(500L)).thenReturn(Optional.of(payment));
 
         service.handleProviderResult(500L, "bank_1", true);
         service.handleProviderResult(500L, "bank_1", true); // duplicate webhook
@@ -210,9 +235,8 @@ class PaymentServiceTest {
 
     @Test
     void declinedWebhookEmitsPaymentFailed() {
-        Payment payment = new Payment(1L, 42L, 100L, "k");
-        ReflectionTestUtils.setField(payment, "id", 500L);
-        when(paymentRepository.findById(500L)).thenReturn(Optional.of(payment));
+        Payment payment = payment(Payment.Status.PENDING);
+        when(paymentRepository.lockById(500L)).thenReturn(Optional.of(payment));
 
         service.handleProviderResult(500L, "bank_1", false);
 
@@ -220,123 +244,163 @@ class PaymentServiceTest {
         verify(outbox).append(eq(EventTypes.TOPIC_PAYMENT_EVENTS), eq("42"), eq(EventTypes.PAYMENT_FAILED), any());
     }
 
-    // ---- refunds
+    @Test
+    void successAfterWeGaveUpIsRecordedSoTheMoneyGetsRefunded() {
+        // our charge call timed out -> FAILED, but the bank did take the money
+        Payment payment = payment(Payment.Status.FAILED);
+        when(paymentRepository.lockById(500L)).thenReturn(Optional.of(payment));
 
-    private Payment succeededPayment() {
-        Payment payment = new Payment(1L, 42L, 100L, "k");
-        ReflectionTestUtils.setField(payment, "id", 500L);
-        payment.setProviderRef("bank_1");
-        payment.succeed();
-        return payment;
+        service.handleProviderResult(500L, "bank_1", true);
+
+        assertEquals(Payment.Status.SUCCEEDED, payment.getStatus());
+        // order-service answers PaymentSucceeded on a cancelled order with OrderCancelled -> refund
+        verify(outbox).append(eq(EventTypes.TOPIC_PAYMENT_EVENTS), eq("42"), eq(EventTypes.PAYMENT_SUCCEEDED), any());
     }
 
     @Test
-    void cancelledPaidOrderIsRefundedOnce() {
-        Payment payment = succeededPayment();
-        when(paymentRepository.findByOrderId(42L)).thenReturn(Optional.of(payment));
-        when(refundRepository.existsByPaymentIdAndStatus(500L, Refund.Status.PENDING)).thenReturn(false);
-        when(refundRepository.save(any(Refund.class))).thenAnswer(inv -> inv.getArgument(0));
+    void lateDeclineForFailedPaymentIsIgnored() {
+        Payment payment = payment(Payment.Status.FAILED);
+        when(paymentRepository.lockById(500L)).thenReturn(Optional.of(payment));
+
+        service.handleProviderResult(500L, "bank_1", false);
+
+        verifyNoInteractions(outbox);
+    }
+
+    // ---- refunds: queued in the caller's transaction, executed by the job
+
+    private Payment succeededPayment() {
+        Payment payment = payment(Payment.Status.SUCCEEDED);
+        payment.setProviderRef("bank_1");
+        return payment;
+    }
+
+    private static Refund refund(long id, Payment payment, String reason) {
+        Refund refund = new Refund(payment.getId(), payment.getAmount(), reason);
+        ReflectionTestUtils.setField(refund, "id", id);
+        return refund;
+    }
+
+    @Test
+    void cancelledPaidOrderQueuesARefundWithoutCallingTheBank() {
+        when(paymentRepository.lockByOrderId(42L)).thenReturn(Optional.of(succeededPayment()));
+        when(refundRepository.existsByPaymentIdAndStatusIn(eq(500L), any())).thenReturn(false);
 
         service.refundByOrderId(42L, "customer cancel after payment");
 
-        assertEquals(Payment.Status.REFUNDED, payment.getStatus());
-        verify(provider).refund("bank_1", 100L);
-        verify(outbox).append(eq(EventTypes.TOPIC_PAYMENT_EVENTS), eq("42"), eq(EventTypes.PAYMENT_REFUNDED),
-                argThat(p -> "customer cancel after payment".equals(p.get("reason"))));
+        verify(refundRepository).save(argThat(r -> r.isPending() && r.getPaymentId() == 500L
+                && "customer cancel after payment".equals(r.getReason())));
+        verifyNoInteractions(provider); // no remote call inside the Kafka listener's transaction
+    }
 
-        // second OrderCancelled (e.g. late-payment path): payment is no longer SUCCEEDED -> nothing
+    @Test
+    void secondRefundRequestForTheSamePaymentIsIgnored() {
+        when(paymentRepository.lockByOrderId(42L)).thenReturn(Optional.of(succeededPayment()));
+        when(refundRepository.existsByPaymentIdAndStatusIn(eq(500L), any())).thenReturn(true);
+
         service.refundByOrderId(42L, "again");
-        verify(provider, times(1)).refund(any(), anyLong());
+
+        verify(refundRepository, never()).save(any());
     }
 
     @Test
     void unpaidOrderHasNothingToRefund() {
-        when(paymentRepository.findByOrderId(42L)).thenReturn(Optional.of(new Payment(1L, 42L, 100L, "k")));
+        when(paymentRepository.lockByOrderId(42L)).thenReturn(Optional.of(payment(Payment.Status.PENDING)));
         service.refundByOrderId(42L, "x");
         verifyNoInteractions(provider, refundRepository);
     }
 
     @Test
     void adminCanOnlyRefundSucceededPayments() {
-        when(paymentRepository.findById(500L)).thenReturn(Optional.of(new Payment(1L, 42L, 100L, "k")));
+        when(paymentRepository.lockById(500L)).thenReturn(Optional.of(payment(Payment.Status.PENDING)));
         assertThrows(ConflictException.class, () -> service.refundByPaymentId(500L, "admin refund"));
     }
 
     @Test
-    void failedProviderRefundStaysPendingForRetryThenGivesUp() {
+    void jobRefundsWithTheRefundIdAsIdempotencyKeyAndEmitsOneEvent() {
         Payment payment = succeededPayment();
-        when(paymentRepository.findByOrderId(42L)).thenReturn(Optional.of(payment));
-        when(refundRepository.existsByPaymentIdAndStatus(500L, Refund.Status.PENDING)).thenReturn(false);
-        Refund[] created = new Refund[1];
-        when(refundRepository.save(any(Refund.class))).thenAnswer(inv -> created[0] = inv.getArgument(0));
-        when(provider.refund(any(), anyLong())).thenThrow(new RuntimeException("bank down"));
+        Refund pending = refund(9L, payment, "customer cancel");
+        when(refundRepository.findTop20ByStatusAndNextAttemptAtBeforeOrderByNextAttemptAtAsc(eq(Refund.Status.PENDING), any()))
+                .thenReturn(List.of(pending));
+        when(refundRepository.findById(9L)).thenReturn(Optional.of(pending));
+        when(paymentRepository.lockById(500L)).thenReturn(Optional.of(payment));
 
-        service.refundByOrderId(42L, "customer cancel");
+        assertEquals(1, service.processDueRefunds());
 
-        assertTrue(created[0].isPending());
-        assertEquals(1, created[0].getAttempts());
-        assertEquals("bank down", created[0].getLastError());
+        verify(provider).refund("refund-9", "bank_1", 100L);
+        assertEquals(Refund.Status.SUCCEEDED, pending.getStatus());
+        assertEquals(Payment.Status.REFUNDED, payment.getStatus());
+        verify(outbox, times(1)).append(eq(EventTypes.TOPIC_PAYMENT_EVENTS), eq("42"), eq(EventTypes.PAYMENT_REFUNDED),
+                argThat(p -> "customer cancel".equals(p.get("reason"))));
+    }
+
+    @Test
+    void failedBankCallIsRetriedWithBackoffThenGivesUp() {
+        Payment payment = succeededPayment();
+        Refund pending = refund(9L, payment, "customer cancel");
+        when(refundRepository.findTop20ByStatusAndNextAttemptAtBeforeOrderByNextAttemptAtAsc(eq(Refund.Status.PENDING), any()))
+                .thenReturn(List.of(pending));
+        when(refundRepository.findById(9L)).thenReturn(Optional.of(pending));
+        when(paymentRepository.lockById(500L)).thenReturn(Optional.of(payment));
+        when(provider.refund(any(), any(), anyLong())).thenThrow(new RuntimeException("bank down"));
+
+        service.processDueRefunds();
+
+        assertTrue(pending.isPending());
+        assertEquals(1, pending.getAttempts());
+        assertEquals("bank down", pending.getLastError());
+        assertTrue(pending.getNextAttemptAt().isAfter(Instant.now()), "next try is pushed back");
         assertEquals(Payment.Status.SUCCEEDED, payment.getStatus(), "not refunded yet");
         verify(outbox, never()).append(any(), any(), eq(EventTypes.PAYMENT_REFUNDED), any());
 
-        // retry job: attempt 2 fails, attempt 3 (max) fails -> FAILED for a human
-        when(refundRepository.findByStatusAndCreatedAtBefore(eq(Refund.Status.PENDING), any(Instant.class)))
-                .thenReturn(List.of(created[0]));
-        when(paymentRepository.findById(500L)).thenReturn(Optional.of(payment));
-        assertEquals(1, service.retryPendingRefunds());
-        assertTrue(created[0].isPending());
-        assertEquals(1, service.retryPendingRefunds());
-        assertEquals(Refund.Status.FAILED, created[0].getStatus());
-        assertEquals(3, created[0].getAttempts());
+        service.processDueRefunds();
+        service.processDueRefunds(); // attempt 3 = max
+        assertEquals(Refund.Status.FAILED, pending.getStatus());
+        assertEquals(3, pending.getAttempts());
     }
 
     @Test
-    void retrySucceedsLaterAndEmitsExactlyOneRefundEvent() {
+    void refundSettledByAnotherReplicaDuringTheBankCallIsNotAppliedTwice() {
         Payment payment = succeededPayment();
-        Refund pending = new Refund(500L, 100L, "customer cancel");
-        pending.recordAttempt();
-        when(refundRepository.findByStatusAndCreatedAtBefore(eq(Refund.Status.PENDING), any(Instant.class)))
-                .thenReturn(List.of(pending));
-        when(paymentRepository.findById(500L)).thenReturn(Optional.of(payment));
+        Refund pending = refund(9L, payment, "x");
+        when(refundRepository.findById(9L)).thenReturn(Optional.of(pending));
+        when(paymentRepository.lockById(500L)).thenReturn(Optional.of(payment));
+        when(provider.refund(any(), any(), anyLong())).thenAnswer(inv -> {
+            pending.succeed(); // the other replica's settle step committed first
+            return new FakeProviderClient.ChargeResponse("bank_1", "SUCCEEDED");
+        });
 
-        service.retryPendingRefunds();
+        service.processRefund(9L, 500L);
 
-        assertEquals(Refund.Status.SUCCEEDED, pending.getStatus());
-        assertEquals(Payment.Status.REFUNDED, payment.getStatus());
-        verify(outbox, times(1)).append(eq(EventTypes.TOPIC_PAYMENT_EVENTS), eq("42"), eq(EventTypes.PAYMENT_REFUNDED), any());
+        assertEquals(0, pending.getAttempts());
+        verifyNoInteractions(outbox);
     }
 
     @Test
-    void duplicatePendingRefundIsSettledWithoutCallingTheBank() {
+    void refundOfAPaymentThatIsNoLongerRefundableFailsWithoutCallingTheBank() {
         Payment payment = succeededPayment();
-        payment.refund(); // another refund row already did it
-        Refund pending = new Refund(500L, 100L, "x");
-        when(refundRepository.findByStatusAndCreatedAtBefore(eq(Refund.Status.PENDING), any(Instant.class)))
-                .thenReturn(List.of(pending));
-        when(paymentRepository.findById(500L)).thenReturn(Optional.of(payment));
+        payment.refund();
+        Refund pending = refund(9L, payment, "x");
+        when(refundRepository.findById(9L)).thenReturn(Optional.of(pending));
+        when(paymentRepository.lockById(500L)).thenReturn(Optional.of(payment));
 
-        service.retryPendingRefunds();
+        service.processRefund(9L, 500L);
 
-        assertEquals(Refund.Status.SUCCEEDED, pending.getStatus());
+        assertEquals(Refund.Status.FAILED, pending.getStatus());
         verifyNoInteractions(provider, outbox);
     }
 
-    // ---- snapshot (ADR 0011)
+    // ---- snapshot (ADR 0011): atomic upserts, the merge rules live in SQL
 
     @Test
-    void snapshotBecomesPayableWhateverTheEventOrder() {
-        OrderSnapshot[] store = new OrderSnapshot[1];
-        when(snapshotRepository.findById(42L)).thenAnswer(inv -> Optional.ofNullable(store[0]));
-        when(snapshotRepository.save(any(OrderSnapshot.class))).thenAnswer(inv -> store[0] = inv.getArgument(0));
-
-        service.markOrderReserved(42L);            // StockReserved overtook OrderCreated
-        assertFalse(store[0].isPayable(), "owner and amount unknown yet");
+    void snapshotEventsBecomeUpserts() {
+        service.markOrderReserved(42L);
         service.rememberOrder(42L, 1L, 100L);
-        assertTrue(store[0].isPayable());
-
         service.markOrderCancelled(42L);
-        assertFalse(store[0].isPayable());
-        service.markOrderReserved(42L);            // nothing revives a cancelled order
-        assertEquals(OrderSnapshot.Status.CANCELLED, store[0].getStatus());
+
+        verify(snapshotRepository).upsertReserved(42L);
+        verify(snapshotRepository).upsertCreated(42L, 1L, 100L);
+        verify(snapshotRepository).upsertCancelled(42L);
+        verify(snapshotRepository, never()).save(any());
     }
 }

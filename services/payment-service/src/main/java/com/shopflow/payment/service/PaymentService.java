@@ -20,10 +20,17 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
+/**
+ * Concurrency model: every status change of a payment happens under
+ * {@link PaymentRepository#lockById} (the webhook, the post-charge update,
+ * refund settlement), and the bank is never called while a DB transaction is
+ * open. Calls to the bank carry an Idempotency-Key, so a retry after a timeout
+ * cannot charge or refund twice.
+ */
 @Service
 public class PaymentService {
 
@@ -58,25 +65,19 @@ public class PaymentService {
     /** OrderCreated: remember owner and amount. Never revives a cancelled order. */
     @Transactional
     public void rememberOrder(Long orderId, Long userId, Long amount) {
-        snapshotRepository.findById(orderId).ifPresentOrElse(
-                s -> s.fillFromOrderCreated(userId, amount),
-                () -> snapshotRepository.save(new OrderSnapshot(orderId, userId, amount, OrderSnapshot.Status.CREATED)));
+        snapshotRepository.upsertCreated(orderId, userId, amount);
     }
 
     /** StockReserved: the order may now be paid. */
     @Transactional
     public void markOrderReserved(Long orderId) {
-        snapshotRepository.findById(orderId).ifPresentOrElse(
-                OrderSnapshot::markReserved,
-                () -> snapshotRepository.save(new OrderSnapshot(orderId, null, null, OrderSnapshot.Status.RESERVED)));
+        snapshotRepository.upsertReserved(orderId);
     }
 
     /** OrderCancelled / StockReservationFailed: no (new) payment for this order. */
     @Transactional
     public void markOrderCancelled(Long orderId) {
-        snapshotRepository.findById(orderId).ifPresentOrElse(
-                OrderSnapshot::markCancelled,
-                () -> snapshotRepository.save(new OrderSnapshot(orderId, null, null, OrderSnapshot.Status.CANCELLED)));
+        snapshotRepository.upsertCancelled(orderId);
     }
 
     // ---------------------------------------------------------------- charge
@@ -99,6 +100,11 @@ public class PaymentService {
      * fast path only — the INSERT is the real arbiter; the loser of a race
      * re-reads the winner's row. A key replayed with a DIFFERENT order is a
      * client bug and is rejected instead of silently returning the old payment.
+     *
+     * If the order is cancelled between the snapshot check and the charge,
+     * the payment still goes through and the late-payment path refunds it
+     * (order-service answers PaymentSucceeded on a cancelled order with
+     * OrderCancelled).
      */
     public Payment createPayment(Long userId, Long orderId, String idempotencyKey) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
@@ -141,12 +147,19 @@ public class PaymentService {
         Long paymentId = payment.getId();
         try {
             var response = providerClient.charge(paymentId, orderId, amount);
-            tx.executeWithoutResult(status -> paymentRepository.findById(paymentId)
-                    .ifPresent(p -> p.setProviderRef(response.providerRef())));
+            // the webhook may already have settled the payment: only fill in what is missing
+            tx.executeWithoutResult(status -> paymentRepository.lockById(paymentId).ifPresent(p -> {
+                if (p.getProviderRef() == null) {
+                    p.setProviderRef(response.providerRef());
+                }
+            }));
         } catch (Exception providerDown) {
-            // NFR-11: retries + circuit breaker already ran; mark failed
+            // NFR-11: retries + circuit breaker already ran. Mark failed only if the
+            // webhook has not settled it meanwhile; if the bank did charge after
+            // all, the late webhook turns this into a refund (handleProviderResult).
             log.warn("Provider charge failed for payment {}", paymentId, providerDown);
-            tx.executeWithoutResult(status -> paymentRepository.findById(paymentId)
+            tx.executeWithoutResult(status -> paymentRepository.lockById(paymentId)
+                    .filter(Payment::isPending)
                     .ifPresent(p -> markFailed(p, "provider unavailable")));
         }
         return paymentRepository.findById(paymentId).orElse(payment);
@@ -160,16 +173,29 @@ public class PaymentService {
         return existing;
     }
 
-    /** Called by the webhook after the HMAC signature was verified (NFR-06). */
+    /**
+     * Called by the webhook after the HMAC signature was verified (NFR-06).
+     * The provider retries webhooks, so duplicates are normal and ignored.
+     *
+     * Special case: we marked the payment FAILED because the charge call timed
+     * out, but the bank did take the money. The success is recorded and
+     * PaymentSucceeded emitted; order-service sees a cancelled order and asks
+     * for the refund (the late-payment path). Ignoring it would keep the
+     * customer's money with no order.
+     */
     @Transactional
     public void handleProviderResult(Long paymentId, String providerRef, boolean succeeded) {
-        Payment payment = paymentRepository.findById(paymentId)
+        Payment payment = paymentRepository.lockById(paymentId)
                 .orElseThrow(() -> new NotFoundException("Payment " + paymentId + " not found"));
-        if (!payment.isPending()) {
+        boolean lateSuccess = succeeded && payment.getStatus() == Payment.Status.FAILED;
+        if (!payment.isPending() && !lateSuccess) {
             return; // duplicate webhook, already settled
         }
         payment.setProviderRef(providerRef);
         if (succeeded) {
+            if (lateSuccess) {
+                log.warn("Payment {} was marked failed but the bank charged it; it will be refunded", paymentId);
+            }
             payment.succeed();
             outbox.append(EventTypes.TOPIC_PAYMENT_EVENTS, String.valueOf(payment.getOrderId()),
                     EventTypes.PAYMENT_SUCCEEDED,
@@ -182,43 +208,108 @@ public class PaymentService {
 
     // ---------------------------------------------------------------- refund (compensation)
 
-    /** FR-10 / saga compensation: OrderCancelled for a paid order -> refund. */
+    /**
+     * FR-10 / saga compensation: OrderCancelled for a paid order -> queue a
+     * refund. Runs in the Kafka listener's transaction, so the refund request
+     * and the processed_events mark commit together; the bank is called later
+     * by {@link RefundRetryJob}, never while the consumer holds a transaction.
+     */
     @Transactional
     public void refundByOrderId(Long orderId, String reason) {
-        paymentRepository.findByOrderId(orderId)
+        paymentRepository.lockByOrderId(orderId)
                 .filter(Payment::isSucceeded)
-                .ifPresent(payment -> startRefund(payment, reason));
+                .ifPresent(payment -> requestRefund(payment, reason));
     }
 
-    /** FR-16: admin refund. */
+    /** FR-16: admin refund. Answers at once; the bank call happens in the background. */
     @Transactional
     public void refundByPaymentId(Long paymentId, String reason) {
-        Payment payment = paymentRepository.findById(paymentId)
+        Payment payment = paymentRepository.lockById(paymentId)
                 .orElseThrow(() -> new NotFoundException("Payment " + paymentId + " not found"));
         if (!payment.isSucceeded()) {
             throw new ConflictException("Only a succeeded payment can be refunded");
         }
-        startRefund(payment, reason);
-    }
-
-    private void startRefund(Payment payment, String reason) {
-        if (refundRepository.existsByPaymentIdAndStatus(payment.getId(), Refund.Status.PENDING)) {
-            return; // a retry is already queued for this payment
-        }
-        Refund refund = refundRepository.save(new Refund(payment.getId(), payment.getAmount(), reason));
-        attemptRefund(refund, payment);
+        requestRefund(payment, reason);
     }
 
     /**
-     * One call to the provider. Success: payment REFUNDED + PaymentRefunded
-     * event (inventory returns the stock, order-service and notification react).
-     * Failure: the refund stays PENDING and {@link #retryPendingRefunds} tries
-     * again later; after the maximum number of attempts it is FAILED for a human.
+     * Caller holds the payment row lock, so two requests (customer cancel and
+     * admin refund at the same moment) see each other's refund row; the partial
+     * unique index on refunds is the final guard.
      */
-    void attemptRefund(Refund refund, Payment payment) {
-        refund.recordAttempt();
+    private void requestRefund(Payment payment, String reason) {
+        if (refundRepository.existsByPaymentIdAndStatusIn(payment.getId(),
+                List.of(Refund.Status.PENDING, Refund.Status.SUCCEEDED))) {
+            return; // already queued or done
+        }
+        refundRepository.save(new Refund(payment.getId(), payment.getAmount(), reason));
+    }
+
+    /** Runs from {@link RefundRetryJob}: every refund whose (next) attempt is due. */
+    public int processDueRefunds() {
+        int processed = 0;
+        for (Refund refund : refundRepository.findTop20ByStatusAndNextAttemptAtBeforeOrderByNextAttemptAtAsc(
+                Refund.Status.PENDING, Instant.now())) {
+            try {
+                processRefund(refund.getId(), refund.getPaymentId());
+                processed++;
+            } catch (Exception e) {
+                log.warn("Could not process refund {}, will retry", refund.getId(), e);
+            }
+        }
+        return processed;
+    }
+
+    private record RefundCall(Long refundId, Long paymentId, String idempotencyKey, String providerRef, Long amount) {}
+
+    /**
+     * One attempt, in three steps so no transaction is open during the bank call:
+     * read what to send; call the bank (Idempotency-Key = refund id, so two
+     * replicas running the job, or a retry after a timeout, pay out once);
+     * settle under the payment lock — only if the refund is still PENDING, so a
+     * concurrent attempt that settled first is not applied twice.
+     * Each step locks the payment row BEFORE reading the refund, so the refund
+     * status it sees is the committed one.
+     */
+    void processRefund(Long refundId, Long paymentId) {
+        RefundCall call = tx.execute(status -> {
+            Payment payment = paymentRepository.lockById(paymentId).orElse(null);
+            Refund refund = refundRepository.findById(refundId).filter(Refund::isPending).orElse(null);
+            if (refund == null) {
+                return null;
+            }
+            if (payment == null || !payment.isSucceeded()) {
+                refund.recordError("payment is not refundable"
+                        + (payment == null ? "" : " (status " + payment.getStatus() + ")"));
+                refund.fail();
+                return null;
+            }
+            return new RefundCall(refund.getId(), payment.getId(), refund.providerIdempotencyKey(),
+                    payment.getProviderRef(), payment.getAmount());
+        });
+        if (call == null) {
+            return;
+        }
+
+        Exception failure = null;
         try {
-            providerClient.refund(payment.getProviderRef(), payment.getAmount());
+            providerClient.refund(call.idempotencyKey(), call.providerRef(), call.amount());
+        } catch (Exception e) {
+            failure = e;
+        }
+
+        Exception error = failure;
+        tx.executeWithoutResult(status -> settleRefund(call, error));
+    }
+
+    private void settleRefund(RefundCall call, Exception error) {
+        Payment payment = paymentRepository.lockById(call.paymentId()).orElseThrow();
+        Refund refund = refundRepository.findById(call.refundId()).orElseThrow();
+        if (!refund.isPending()) {
+            return; // another replica settled this attempt first
+        }
+        refund.recordAttempt();
+        if (error == null) {
             refund.succeed();
             payment.refund();
             outbox.append(EventTypes.TOPIC_PAYMENT_EVENTS, String.valueOf(payment.getOrderId()),
@@ -226,38 +317,18 @@ public class PaymentService {
                     Map.of("paymentId", payment.getId(), "amount", payment.getAmount(),
                             "reason", refund.getReason() == null ? "" : refund.getReason(),
                             "userId", payment.getUserId()));
-        } catch (Exception e) {
-            refund.recordError(e.getMessage());
-            if (refund.getAttempts() >= refundMaxAttempts) {
-                refund.fail();
-                log.error("Refund {} for payment {} failed {} times — needs manual action",
-                        refund.getId(), payment.getId(), refund.getAttempts(), e);
-            } else {
-                log.warn("Refund {} for payment {} failed (attempt {}), will retry",
-                        refund.getId(), payment.getId(), refund.getAttempts(), e);
-            }
+            return;
         }
-    }
-
-    /** Runs from {@link RefundRetryJob}. Refunds younger than 30s are left to their first attempt. */
-    @Transactional
-    public int retryPendingRefunds() {
-        int retried = 0;
-        for (Refund refund : refundRepository.findByStatusAndCreatedAtBefore(
-                Refund.Status.PENDING, Instant.now().minus(Duration.ofSeconds(30)))) {
-            Payment payment = paymentRepository.findById(refund.getPaymentId()).orElse(null);
-            if (payment == null) {
-                refund.fail();
-                continue;
-            }
-            if (!payment.isSucceeded()) {
-                refund.succeed(); // another refund row already settled this payment
-                continue;
-            }
-            attemptRefund(refund, payment);
-            retried++;
+        refund.recordError(error.getMessage());
+        if (refund.getAttempts() >= refundMaxAttempts) {
+            refund.fail();
+            log.error("Refund {} for payment {} failed {} times — needs manual action",
+                    refund.getId(), payment.getId(), refund.getAttempts(), error);
+        } else {
+            refund.scheduleRetry(Instant.now());
+            log.warn("Refund {} for payment {} failed (attempt {}), will retry at {}",
+                    refund.getId(), payment.getId(), refund.getAttempts(), refund.getNextAttemptAt(), error);
         }
-        return retried;
     }
 
     private void markFailed(Payment payment, String reason) {

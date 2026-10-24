@@ -8,7 +8,8 @@ import java.util.List;
 
 public interface RefundRepository extends JpaRepository<Refund, Long> {
 
-    boolean existsByPaymentIdAndStatus(Long paymentId, Refund.Status status);
+    boolean existsByPaymentIdAndStatusIn(Long paymentId, List<Refund.Status> statuses);
 
-    List<Refund> findByStatusAndCreatedAtBefore(Refund.Status status, Instant cutoff);
+    /** Refunds whose next attempt is due, oldest first. */
+    List<Refund> findTop20ByStatusAndNextAttemptAtBeforeOrderByNextAttemptAtAsc(Refund.Status status, Instant now);
 }

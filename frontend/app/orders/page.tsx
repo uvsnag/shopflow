@@ -5,7 +5,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ApiError, errorMessage, formatVnd, getOrders, type Order } from "@/lib/api";
-import { ErrorText, formatDate, LoginPrompt, StatusBadge, styles } from "@/components/ui";
+import { EmptyState, ErrorText, formatDate, Loading, LoginPrompt, StatusBadge } from "@/components/ui";
 
 const PAGE_SIZE = 20;
 
@@ -33,45 +33,54 @@ export default function OrdersPage() {
 
   return (
     <div>
-      <h1>My orders</h1>
+      <div className="page-header">
+        <h1>My orders</h1>
+      </div>
       <ErrorText>{error}</ErrorText>
-      {!orders && !error && <p style={styles.muted}>Loading…</p>}
+      {!orders && !error && <Loading />}
       {orders && orders.length === 0 && page === 0 && (
-        <p>
-          No orders yet. <Link href="/">Browse products</Link>
-        </p>
+        <EmptyState title="No orders yet">
+          <p>Your orders will show up here once you place one.</p>
+          <Link href="/" className="btn btn-primary">Browse products</Link>
+        </EmptyState>
       )}
       {orders && orders.length > 0 && (
-        <div style={{ overflowX: "auto" }}>
-          <table style={styles.table}>
+        <div className="table-wrap">
+          <table className="table">
             <thead>
               <tr>
-                <th style={styles.cell}>Order</th>
-                <th style={styles.cell}>Placed</th>
-                <th style={styles.cell}>Status</th>
-                <th style={styles.cell}>Items</th>
-                <th style={styles.cell}>Total</th>
+                <th>Order</th>
+                <th>Placed</th>
+                <th>Status</th>
+                <th className="num">Items</th>
+                <th className="num">Total</th>
+                <th />
               </tr>
             </thead>
             <tbody>
               {orders.map((o) => (
                 <tr key={o.id}>
-                  <td style={styles.cell}><Link href={`/orders/${o.id}`}>#{o.id}</Link></td>
-                  <td style={styles.cell}>{formatDate(o.createdAt)}</td>
-                  <td style={styles.cell}><StatusBadge status={o.status} /></td>
-                  <td style={styles.cell}>{o.items.reduce((n, i) => n + i.quantity, 0)}</td>
-                  <td style={styles.cell}>{formatVnd(o.totalAmount, o.currency)}</td>
+                  <td><Link href={`/orders/${o.id}`}><strong>#{o.id}</strong></Link></td>
+                  <td className="nowrap">{formatDate(o.createdAt)}</td>
+                  <td><StatusBadge status={o.status} /></td>
+                  <td className="num">{o.items.reduce((n, i) => n + i.quantity, 0)}</td>
+                  <td className="num">{formatVnd(o.totalAmount, o.currency)}</td>
+                  <td className="actions">
+                    <Link href={`/orders/${o.id}`} className="btn btn-sm">View</Link>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
-        <button style={styles.button} disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button>
-        <span>Page {page + 1}</span>
-        <button style={styles.button} disabled={!orders || orders.length < PAGE_SIZE} onClick={() => setPage(page + 1)}>Next</button>
-      </div>
+      {(page > 0 || (orders && orders.length > 0)) && (
+        <div className="pagination">
+          <button className="btn btn-sm" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button>
+          <span>Page {page + 1}</span>
+          <button className="btn btn-sm" disabled={!orders || orders.length < PAGE_SIZE} onClick={() => setPage(page + 1)}>Next</button>
+        </div>
+      )}
     </div>
   );
 }

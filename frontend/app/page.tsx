@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { addToCart, CATEGORIES, categoryName, errorMessage, formatVnd, getProducts, type ProductPage } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
-import { ErrorText, styles } from "@/components/ui";
+import { EmptyState, ErrorText, Loading } from "@/components/ui";
 
 const PAGE_SIZE = 12;
 
@@ -60,10 +60,16 @@ export default function ProductListPage() {
 
   return (
     <div>
-      <h1>Products</h1>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+      <div className="page-header">
+        <div>
+          <h1>Products</h1>
+          {data && <p className="subtitle">{data.totalItems} products</p>}
+        </div>
+      </div>
+
+      <div className="toolbar">
         <input
-          style={{ ...styles.input, flex: "1 1 200px" }}
+          className="input grow"
           placeholder="Search products…"
           value={query}
           onChange={(e) => {
@@ -72,7 +78,7 @@ export default function ProductListPage() {
           }}
         />
         <select
-          style={styles.input}
+          className="input"
           value={category}
           onChange={(e) => {
             setPage(0);
@@ -87,51 +93,54 @@ export default function ProductListPage() {
       </div>
 
       <ErrorText>{error}</ErrorText>
-      {loading && !data && <p style={styles.muted}>Loading…</p>}
-      {data && data.items.length === 0 && <p>No products found.</p>}
+      {loading && !data && <Loading />}
+      {data && data.items.length === 0 && (
+        <EmptyState title="No products found">Try another search or category.</EmptyState>
+      )}
 
-      <ul
-        style={{
-          listStyle: "none",
-          padding: 0,
-          display: "grid",
-          gap: 12,
-          gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-        }}
-      >
+      <ul className="product-grid">
         {data?.items.map((p) => (
-          <li key={p.id} style={{ ...styles.card, display: "flex", flexDirection: "column", gap: 6 }}>
-            {p.imageUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={p.imageUrl} alt={p.name} style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 4 }} />
-            ) : (
-              <div style={{ height: 120, background: "#f0f0f0", borderRadius: 4 }} />
-            )}
-            <Link href={`/products/${p.id}`} style={{ fontWeight: 600 }}>{p.name}</Link>
-            <span style={styles.muted}>{categoryName(p.categoryId)}</span>
-            <span>{formatVnd(p.price)}</span>
-            <button
-              style={styles.primary}
-              onClick={() => onAdd(p.id)}
-              disabled={!ready || added[p.id] === "Adding…"}
-              title={ready && !user ? "Log in to add to cart" : undefined}
-            >
-              {ready && !user ? "Log in to add" : "Add to cart"}
-            </button>
-            {added[p.id] && added[p.id] !== "Adding…" && (
-              <span style={{ fontSize: 13, color: added[p.id] === "Added to cart" ? "#065f46" : "crimson" }}>
-                {added[p.id]}
-              </span>
-            )}
+          <li key={p.id} className="product-card">
+            <Link href={`/products/${p.id}`} className="product-media" aria-label={p.name}>
+              {p.imageUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={p.imageUrl} alt={p.name} />
+              ) : (
+                <div className="product-placeholder" aria-hidden="true">
+                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <rect x="3" y="5" width="18" height="14" rx="2" />
+                    <path d="m3 16 5-5 4 4 3-3 6 6" />
+                    <circle cx="16" cy="9" r="1.5" />
+                  </svg>
+                </div>
+              )}
+            </Link>
+            <div className="product-body">
+              <span className="product-category">{categoryName(p.categoryId)}</span>
+              <Link href={`/products/${p.id}`} className="product-name">{p.name}</Link>
+              <span className="product-price">{formatVnd(p.price)}</span>
+              <button
+                className="btn btn-primary"
+                onClick={() => onAdd(p.id)}
+                disabled={!ready || added[p.id] === "Adding…"}
+                title={ready && !user ? "Log in to add to cart" : undefined}
+              >
+                {ready && !user ? "Log in to add" : added[p.id] === "Adding…" ? "Adding…" : "Add to cart"}
+              </button>
+              {added[p.id] && added[p.id] !== "Adding…" && (
+                <span className={`hint ${added[p.id] === "Added to cart" ? "hint-ok" : "hint-error"}`}>
+                  {added[p.id]}
+                </span>
+              )}
+            </div>
           </li>
         ))}
       </ul>
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
-        <button style={styles.button} disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button>
+      <div className="pagination">
+        <button className="btn btn-sm" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button>
         <span>Page {page + 1} of {data ? Math.max(data.totalPages, 1) : "…"}</span>
-        <button style={styles.button} disabled={!data || page + 1 >= data.totalPages} onClick={() => setPage(page + 1)}>Next</button>
-        {data && <span style={styles.muted}>{data.totalItems} products</span>}
+        <button className="btn btn-sm" disabled={!data || page + 1 >= data.totalPages} onClick={() => setPage(page + 1)}>Next</button>
       </div>
     </div>
   );

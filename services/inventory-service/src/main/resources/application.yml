@@ -21,4 +21,6 @@ spring:
       group-id: inventory-service
 
 shopflow:
-  reservation-ttl: 15m   # BR-03
+  # safety net only: order-service cancels unpaid orders after 15m (BR-03);
+  # the reservation must outlive that so a last-second payment keeps its stock
+  reservation-ttl: 30m

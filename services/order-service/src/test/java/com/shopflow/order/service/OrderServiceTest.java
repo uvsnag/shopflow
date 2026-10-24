@@ -3,6 +3,7 @@ package com.shopflow.order.service;
 import com.shopflow.common.event.EventTypes;
 import com.shopflow.common.outbox.OutboxService;
 import com.shopflow.common.web.BadRequestException;
+import com.shopflow.common.web.ConflictException;
 import com.shopflow.common.web.NotFoundException;
 import com.shopflow.order.client.ProductClient;
 import com.shopflow.order.domain.Cart;
@@ -24,6 +25,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 
@@ -53,6 +55,24 @@ class OrderServiceTest {
         ReflectionTestUtils.setField(order, "id", 100L);
         // run the "new order" transaction body inline
         lenient().when(tx.execute(any())).thenAnswer(inv -> inv.getArgument(0, TransactionCallback.class).doInTransaction(null));
+        lenient().when(orderRepository.lockById(100L)).thenReturn(Optional.of(order));
+    }
+
+    private static Cart cartWith(Long productId, int quantity) {
+        Cart cart = new Cart(1L);
+        cart.putItem(productId, quantity);
+        return cart;
+    }
+
+    private void cartIs(Cart cart) {
+        lenient().when(cartService.contents(1L)).thenReturn(CartService.contentsOf(cart));
+        lenient().when(cartService.lock(1L)).thenReturn(Optional.of(cart));
+    }
+
+    private void moveTo(OrderStatus... path) {
+        for (OrderStatus s : path) {
+            order.transitionTo(s);
+        }
     }
 
     // ---- FR-07 / NFR-10
@@ -71,7 +91,7 @@ class OrderServiceTest {
     void anotherUsersKeyDoesNotReplayTheirOrder() {
         // the lookup is scoped by user: user 2 with user 1's key starts a normal (empty-cart) flow
         when(orderRepository.findByUserIdAndIdempotencyKey(2L, "key-1")).thenReturn(Optional.empty());
-        when(cartService.getOrCreate(2L)).thenReturn(new Cart(2L));
+        when(cartService.contents(2L)).thenReturn(Map.of());
 
         assertThrows(BadRequestException.class, () -> service.placeOrder(2L, "key-1"));
         verify(orderRepository, never()).findByUserIdAndIdempotencyKey(1L, "key-1");
@@ -79,12 +99,10 @@ class OrderServiceTest {
 
     @Test
     void losingTheInsertRaceReturnsTheWinnersOrder() {
-        Cart cart = new Cart(1L);
-        cart.putItem(10L, 2);
-        // first lookup misses (both requests passed the fast path), second finds the winner
+        cartIs(cartWith(10L, 2));
+        // lookups before and under the lock miss (both requests got that far), the one after the failed insert finds the winner
         when(orderRepository.findByUserIdAndIdempotencyKey(1L, "key-1"))
-                .thenReturn(Optional.empty(), Optional.of(order));
-        when(cartService.getOrCreate(1L)).thenReturn(cart);
+                .thenReturn(Optional.empty(), Optional.empty(), Optional.of(order));
         when(productClient.getProduct(10L)).thenReturn(new ProductClient.ProductInfo(10L, "Mouse", 250_000L, true));
         when(orderRepository.save(any(Order.class))).thenThrow(new DataIntegrityViolationException("uk_orders_user_idempotency_key"));
 
@@ -95,6 +113,41 @@ class OrderServiceTest {
     }
 
     @Test
+    void sameKeyWaitingOnTheCartLockReturnsTheWinnersOrder() {
+        Cart emptied = new Cart(1L); // the winner already cleared it
+        when(cartService.contents(1L)).thenReturn(Map.of(10L, 2));
+        when(cartService.lock(1L)).thenReturn(Optional.of(emptied));
+        when(orderRepository.findByUserIdAndIdempotencyKey(1L, "key-1"))
+                .thenReturn(Optional.empty(), Optional.of(order));
+        when(productClient.getProduct(10L)).thenReturn(new ProductClient.ProductInfo(10L, "Mouse", 250_000L, true));
+
+        assertSame(order, service.placeOrder(1L, "key-1"), "no 'cart is empty' error for a retried request");
+        verify(orderRepository, never()).save(any());
+    }
+
+    @Test
+    void cartChangedWhilePricingIsAConflict() {
+        when(orderRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
+        when(cartService.contents(1L)).thenReturn(Map.of(10L, 2));
+        when(cartService.lock(1L)).thenReturn(Optional.of(cartWith(10L, 5))); // quantity changed meanwhile
+        when(productClient.getProduct(10L)).thenReturn(new ProductClient.ProductInfo(10L, "Mouse", 250_000L, true));
+
+        assertThrows(ConflictException.class, () -> service.placeOrder(1L, "k"));
+        verify(orderRepository, never()).save(any());
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void productServiceIsCalledOutsideTheTransaction() {
+        when(orderRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
+        when(cartService.contents(1L)).thenReturn(Map.of(10L, 1));
+        when(productClient.getProduct(10L)).thenThrow(new BadRequestException("Product 10 is not available"));
+
+        assertThrows(BadRequestException.class, () -> service.placeOrder(1L, "k"));
+        verifyNoInteractions(tx); // failed before any transaction was opened
+    }
+
+    @Test
     void missingKeyIsRejected() {
         assertThrows(BadRequestException.class, () -> service.placeOrder(1L, " "));
     }
@@ -102,17 +155,16 @@ class OrderServiceTest {
     @Test
     void emptyCartIsRejected() {
         when(orderRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
-        when(cartService.getOrCreate(1L)).thenReturn(new Cart(1L));
+        when(cartService.contents(1L)).thenReturn(Map.of());
 
         assertThrows(BadRequestException.class, () -> service.placeOrder(1L, "k"));
     }
 
     @Test
     void placeOrderFreezesPriceClearsCartAndEmitsOrderCreated() {
-        Cart cart = new Cart(1L);
-        cart.putItem(10L, 2);
+        Cart cart = cartWith(10L, 2);
+        cartIs(cart);
         when(orderRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
-        when(cartService.getOrCreate(1L)).thenReturn(cart);
         when(productClient.getProduct(10L)).thenReturn(new ProductClient.ProductInfo(10L, "Mouse", 250_000L, true));
         when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
             Order o = inv.getArgument(0);
@@ -135,22 +187,18 @@ class OrderServiceTest {
 
     @Test
     void hiddenProductCannotBeOrdered() {
-        Cart cart = new Cart(1L);
-        cart.putItem(10L, 1);
         when(orderRepository.findByUserIdAndIdempotencyKey(1L, "k")).thenReturn(Optional.empty());
-        when(cartService.getOrCreate(1L)).thenReturn(cart);
+        when(cartService.contents(1L)).thenReturn(Map.of(10L, 1));
         when(productClient.getProduct(10L)).thenReturn(new ProductClient.ProductInfo(10L, "Mouse", 1L, false));
 
         assertThrows(BadRequestException.class, () -> service.placeOrder(1L, "k"));
         verify(outbox, never()).append(any(), any(), any(), any());
     }
 
-    // ---- status machine + events
+    // ---- commands: strict status machine + events
 
     @Test
     void changeStatusRecordsHistoryAndEmitsCancelledEvent() {
-        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
-
         service.changeStatus(100L, OrderStatus.CANCELLED, "out of stock");
 
         assertEquals(OrderStatus.CANCELLED, order.getStatus());
@@ -162,27 +210,23 @@ class OrderServiceTest {
     }
 
     @Test
-    void duplicateSagaEventIsANoOp() {
-        order.transitionTo(OrderStatus.STOCK_RESERVED);
-        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+    void repeatedCommandIsANoOp() {
+        moveTo(OrderStatus.STOCK_RESERVED, OrderStatus.PAID, OrderStatus.SHIPPED);
 
-        service.changeStatus(100L, OrderStatus.STOCK_RESERVED, "stock reserved");
+        service.changeStatus(100L, OrderStatus.SHIPPED, "admin ships");
 
         verifyNoInteractions(historyRepository, outbox);
     }
 
     @Test
-    void illegalTransitionBubblesUp() {
-        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+    void illegalCommandBubblesUp() {
         assertThrows(IllegalStateException.class, () -> service.changeStatus(100L, OrderStatus.SHIPPED, "admin ships"));
         verifyNoInteractions(outbox);
     }
 
     @Test
     void shippedAndDeliveredNotifyButDoNotCompensate() {
-        order.transitionTo(OrderStatus.STOCK_RESERVED);
-        order.transitionTo(OrderStatus.PAID);
-        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+        moveTo(OrderStatus.STOCK_RESERVED, OrderStatus.PAID);
 
         service.changeStatus(100L, OrderStatus.SHIPPED, "admin ships");
         service.changeStatus(100L, OrderStatus.DELIVERED, "admin delivers");
@@ -192,12 +236,37 @@ class OrderServiceTest {
         verify(outbox, never()).append(any(), any(), eq(EventTypes.ORDER_CANCELLED), any());
     }
 
-    // ---- payment outcomes
+    // ---- saga events: tolerant of late / out-of-order delivery
+
+    @Test
+    void stockReservedMovesPendingOrder() {
+        service.onStockReserved(100L);
+        assertEquals(OrderStatus.STOCK_RESERVED, order.getStatus());
+    }
+
+    @Test
+    void stockReservedAfterCancelIsIgnoredNotRetried() {
+        moveTo(OrderStatus.CANCELLED); // customer cancelled before inventory answered
+
+        assertDoesNotThrow(() -> service.onStockReserved(100L));
+
+        assertEquals(OrderStatus.CANCELLED, order.getStatus());
+        verifyNoInteractions(historyRepository, outbox);
+    }
+
+    @Test
+    void reservationFailureCancelsOnlyAPendingOrder() {
+        service.onStockReservationFailed(100L);
+        assertEquals(OrderStatus.CANCELLED, order.getStatus());
+
+        clearInvocations(outbox);
+        service.onStockReservationFailed(100L); // duplicate / late: nothing more
+        verifyNoInteractions(outbox);
+    }
 
     @Test
     void paymentSucceededMovesReservedOrderToPaid() {
-        order.transitionTo(OrderStatus.STOCK_RESERVED);
-        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+        moveTo(OrderStatus.STOCK_RESERVED);
 
         service.onPaymentSucceeded(100L);
 
@@ -206,9 +275,21 @@ class OrderServiceTest {
     }
 
     @Test
+    void paymentOvertakingStockReservedStillPaysTheOrder() {
+        // payment-service only accepts a payment after StockReserved, so a PENDING order here
+        // means our own StockReserved is still in flight on the other topic
+        service.onPaymentSucceeded(100L);
+
+        assertEquals(OrderStatus.PAID, order.getStatus());
+        verify(historyRepository, times(2)).save(any(OrderStatusHistory.class));
+
+        service.onStockReserved(100L); // the late StockReserved is now stale
+        assertEquals(OrderStatus.PAID, order.getStatus());
+    }
+
+    @Test
     void latePaymentOnCancelledOrderTriggersRefundInsteadOfFailing() {
-        order.transitionTo(OrderStatus.CANCELLED);
-        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+        moveTo(OrderStatus.CANCELLED);
 
         service.onPaymentSucceeded(100L);
 
@@ -219,9 +300,19 @@ class OrderServiceTest {
     }
 
     @Test
+    void paymentFailureCancelsUnpaidOrderAndIsIgnoredLater() {
+        moveTo(OrderStatus.STOCK_RESERVED);
+        service.onPaymentFailed(100L);
+        assertEquals(OrderStatus.CANCELLED, order.getStatus());
+
+        clearInvocations(outbox);
+        assertDoesNotThrow(() -> service.onPaymentFailed(100L));
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
     void refundOfLatePaymentIsOnlyAHistoryNote() {
-        order.transitionTo(OrderStatus.CANCELLED);
-        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+        moveTo(OrderStatus.CANCELLED);
 
         service.onPaymentRefunded(100L);
 
@@ -231,14 +322,55 @@ class OrderServiceTest {
     }
 
     @Test
-    void refundOfPaidOrderMovesItToRefunded() {
-        order.transitionTo(OrderStatus.STOCK_RESERVED);
-        order.transitionTo(OrderStatus.PAID);
-        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+    void adminRefundOfPaidOrderMovesItToRefundedAndRestocks() {
+        moveTo(OrderStatus.STOCK_RESERVED, OrderStatus.PAID);
 
         service.onPaymentRefunded(100L);
 
         assertEquals(OrderStatus.REFUNDED, order.getStatus());
+        // inventory only gives sold stock back on OrderCancelled
+        verify(outbox).append(eq(EventTypes.TOPIC_ORDER_EVENTS), eq("100"), eq(EventTypes.ORDER_CANCELLED), payload.capture());
+        assertEquals("PAID", payload.getValue().get("previousStatus"));
+    }
+
+    @Test
+    void refundAfterCustomerCancelDoesNotEmitAgain() {
+        moveTo(OrderStatus.STOCK_RESERVED, OrderStatus.PAID, OrderStatus.REFUNDED);
+
+        service.onPaymentRefunded(100L);
+
+        verifyNoInteractions(outbox, historyRepository);
+    }
+
+    @Test
+    void refundOfShippedOrderIsRecordedWithoutRestock() {
+        moveTo(OrderStatus.STOCK_RESERVED, OrderStatus.PAID, OrderStatus.SHIPPED);
+
+        assertDoesNotThrow(() -> service.onPaymentRefunded(100L));
+
+        assertEquals(OrderStatus.SHIPPED, order.getStatus());
+        verify(historyRepository).save(any(OrderStatusHistory.class));
+        verifyNoInteractions(outbox);
+    }
+
+    // ---- BR-03 timeout
+
+    @Test
+    void timeoutCancelsStillUnpaidOrder() {
+        ReflectionTestUtils.setField(order, "createdAt", Instant.now().minusSeconds(3600));
+
+        assertTrue(service.cancelIfUnpaid(100L, Instant.now().minusSeconds(900)));
+        assertEquals(OrderStatus.CANCELLED, order.getStatus());
+    }
+
+    @Test
+    void timeoutDoesNotTouchAnOrderPaidMeanwhile() {
+        ReflectionTestUtils.setField(order, "createdAt", Instant.now().minusSeconds(3600));
+        moveTo(OrderStatus.STOCK_RESERVED, OrderStatus.PAID); // paid between listing and lock
+
+        assertFalse(service.cancelIfUnpaid(100L, Instant.now().minusSeconds(900)));
+        assertEquals(OrderStatus.PAID, order.getStatus());
+        verifyNoInteractions(outbox);
     }
 
     // ---- FR-10 / BR-06
@@ -252,8 +384,7 @@ class OrderServiceTest {
 
     @Test
     void customerCancelOfUnpaidOrderReleasesStock() {
-        order.transitionTo(OrderStatus.STOCK_RESERVED);
-        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+        moveTo(OrderStatus.STOCK_RESERVED);
 
         service.customerCancel(100L, 1L);
 
@@ -263,9 +394,7 @@ class OrderServiceTest {
 
     @Test
     void customerCancelOfPaidOrderAsksForRefund() {
-        order.transitionTo(OrderStatus.STOCK_RESERVED);
-        order.transitionTo(OrderStatus.PAID);
-        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+        moveTo(OrderStatus.STOCK_RESERVED, OrderStatus.PAID);
 
         service.customerCancel(100L, 1L);
 
@@ -276,10 +405,7 @@ class OrderServiceTest {
 
     @Test
     void shippedOrderCannotBeCancelled() {
-        order.transitionTo(OrderStatus.STOCK_RESERVED);
-        order.transitionTo(OrderStatus.PAID);
-        order.transitionTo(OrderStatus.SHIPPED);
-        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+        moveTo(OrderStatus.STOCK_RESERVED, OrderStatus.PAID, OrderStatus.SHIPPED);
 
         assertThrows(BadRequestException.class, () -> service.customerCancel(100L, 1L));
         verifyNoInteractions(outbox);

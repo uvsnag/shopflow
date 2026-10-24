@@ -4,7 +4,6 @@ import com.shopflow.common.event.EventEnvelope;
 import com.shopflow.common.event.EventMapper;
 import com.shopflow.common.event.EventTypes;
 import com.shopflow.common.idempotency.IdempotencyGuard;
-import com.shopflow.order.domain.OrderStatus;
 import com.shopflow.order.service.OrderService;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
@@ -17,6 +16,8 @@ import org.springframework.transaction.annotation.Transactional;
  * Each handler is @Transactional so the processed_events mark (NFR-09) and the
  * status change commit together: a failure rolls back both and the Kafka retry
  * can process the event again instead of skipping it as a duplicate.
+ * Events that arrive after the order moved on are ignored by OrderService
+ * (see its class comment), so they do not end up in the DLT.
  */
 @Component
 public class OrderSagaListener {
@@ -40,10 +41,8 @@ public class OrderSagaListener {
         }
         Long orderId = Long.valueOf(event.orderId());
         switch (event.eventType()) {
-            case EventTypes.STOCK_RESERVED ->
-                    orderService.changeStatus(orderId, OrderStatus.STOCK_RESERVED, "stock reserved");
-            case EventTypes.STOCK_RESERVATION_FAILED ->
-                    orderService.changeStatus(orderId, OrderStatus.CANCELLED, "out of stock");
+            case EventTypes.STOCK_RESERVED -> orderService.onStockReserved(orderId);
+            case EventTypes.STOCK_RESERVATION_FAILED -> orderService.onStockReservationFailed(orderId);
             default -> { }
         }
     }
@@ -58,8 +57,7 @@ public class OrderSagaListener {
         Long orderId = Long.valueOf(event.orderId());
         switch (event.eventType()) {
             case EventTypes.PAYMENT_SUCCEEDED -> orderService.onPaymentSucceeded(orderId);
-            case EventTypes.PAYMENT_FAILED ->
-                    orderService.changeStatus(orderId, OrderStatus.CANCELLED, "payment failed");
+            case EventTypes.PAYMENT_FAILED -> orderService.onPaymentFailed(orderId);
             case EventTypes.PAYMENT_REFUNDED -> orderService.onPaymentRefunded(orderId);
             default -> { }
         }

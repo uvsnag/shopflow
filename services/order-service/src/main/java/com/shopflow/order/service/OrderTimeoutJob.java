@@ -1,6 +1,5 @@
 package com.shopflow.order.service;
 
-import com.shopflow.order.domain.Order;
 import com.shopflow.order.domain.OrderStatus;
 import com.shopflow.order.repository.OrderRepository;
 import org.slf4j.Logger;
@@ -13,7 +12,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
-/** BR-03 / NFR-12: unpaid orders are cancelled automatically after 15 minutes. */
+/**
+ * BR-03 / NFR-12: unpaid orders are cancelled automatically after 15 minutes.
+ * Each order is cancelled in its own transaction and re-checked under its row
+ * lock ({@link OrderService#cancelIfUnpaid}), so a payment that lands between
+ * the listing and the cancel wins, and two replicas running the job at the
+ * same time cancel each order once.
+ */
 @Component
 public class OrderTimeoutJob {
 
@@ -34,13 +39,13 @@ public class OrderTimeoutJob {
     @Scheduled(fixedDelayString = "${shopflow.timeout-poll-ms:60000}")
     public void cancelUnpaidOrders() {
         Instant cutoff = Instant.now().minus(paymentTimeout);
-        List<Order> stale = orderRepository.findByStatusInAndCreatedAtBefore(
+        List<Long> stale = orderRepository.findIdsByStatusInAndCreatedAtBefore(
                 List.of(OrderStatus.PENDING, OrderStatus.STOCK_RESERVED), cutoff);
-        for (Order order : stale) {
+        for (Long orderId : stale) {
             try {
-                orderService.changeStatus(order.getId(), OrderStatus.CANCELLED, "payment timeout");
+                orderService.cancelIfUnpaid(orderId, cutoff);
             } catch (Exception e) {
-                log.warn("Could not cancel stale order {}", order.getId(), e);
+                log.warn("Could not cancel stale order {}, will retry", orderId, e);
             }
         }
     }

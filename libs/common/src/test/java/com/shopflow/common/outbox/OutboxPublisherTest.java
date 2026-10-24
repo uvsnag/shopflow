@@ -1,14 +1,17 @@
 package com.shopflow.common.outbox;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -19,7 +22,12 @@ class OutboxPublisherTest {
     @SuppressWarnings("unchecked")
     private final KafkaTemplate<String, String> kafka = mock(KafkaTemplate.class);
     private final OutboxRepository repository = mock(OutboxRepository.class);
-    private final OutboxPublisher publisher = new OutboxPublisher(repository, kafka);
+    private final OutboxPublisher publisher = new OutboxPublisher(repository, kafka, Duration.ofDays(7));
+
+    @BeforeEach
+    void thisReplicaGetsThePublisherLock() {
+        when(repository.tryAdvisoryXactLock(anyLong())).thenReturn(true);
+    }
 
     @Test
     void sendsPendingRowsInOrderAndMarksThem() {
@@ -51,5 +59,15 @@ class OutboxPublisherTest {
         assertNull(first.getSentAt());
         assertNull(second.getSentAt());
         verify(kafka, never()).send(anyString(), anyString(), eq("{\"a\":2}"));
+    }
+
+    @Test
+    void anotherReplicaHoldingTheLockMeansThisOneSkipsTheTick() {
+        when(repository.tryAdvisoryXactLock(anyLong())).thenReturn(false);
+
+        publisher.publishPending();
+
+        verify(repository, never()).findTop50BySentAtIsNullOrderByCreatedAtAsc();
+        verifyNoInteractions(kafka);
     }
 }

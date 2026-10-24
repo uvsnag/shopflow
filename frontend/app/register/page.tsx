@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { ApiError, errorMessage, login, register } from "@/lib/api";
-import { ErrorText, styles } from "@/components/ui";
+import { ErrorText } from "@/components/ui";
 
 function RegisterForm() {
   const router = useRouter();
@@ -54,23 +54,26 @@ function RegisterForm() {
   }
 
   const field = (label: string, key: string, input: React.ReactNode) => (
-    <label style={{ display: "grid", gap: 4 }}>
+    <label className="field">
       <span>{label}</span>
       {input}
-      {fieldErrors[key] && <span style={{ color: "crimson", fontSize: 13 }}>{fieldErrors[key]}</span>}
+      {fieldErrors[key] && <span className="field-error">{fieldErrors[key]}</span>}
     </label>
   );
 
   return (
-    <form onSubmit={onSubmit} noValidate style={{ display: "grid", gap: 12, maxWidth: 360 }}>
-      <h1>Create account</h1>
-      {field("Email", "email", <input style={styles.input} type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" required />)}
-      {field("Full name", "fullName", <input style={styles.input} value={fullName} onChange={(e) => setFullName(e.target.value)} autoComplete="name" required />)}
-      {field("Password (min 8 characters)", "password", <input style={styles.input} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" required />)}
-      {field("Confirm password", "confirm", <input style={styles.input} type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" required />)}
-      <button type="submit" style={styles.primary} disabled={busy}>{busy ? "Creating…" : "Register"}</button>
+    <form onSubmit={onSubmit} noValidate className="card auth-card stack">
+      <div>
+        <h1>Create account</h1>
+        <p className="lead">A few details and you are ready to shop.</p>
+      </div>
       <ErrorText>{error}</ErrorText>
-      <p style={styles.muted}>
+      {field("Email", "email", <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" placeholder="you@example.com" required />)}
+      {field("Full name", "fullName", <input className="input" value={fullName} onChange={(e) => setFullName(e.target.value)} autoComplete="name" required />)}
+      {field("Password (min 8 characters)", "password", <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" required />)}
+      {field("Confirm password", "confirm", <input className="input" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" required />)}
+      <button type="submit" className="btn btn-primary btn-block" disabled={busy}>{busy ? "Creating…" : "Create account"}</button>
+      <p className="switch">
         Already have an account? <Link href={`/login?next=${encodeURIComponent(next)}`}>Log in</Link>
       </p>
     </form>

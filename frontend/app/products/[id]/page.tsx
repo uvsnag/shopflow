@@ -7,7 +7,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { addToCart, ApiError, categoryName, errorMessage, formatVnd, getProduct, getStock, type Product } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
-import { ErrorText, InfoText, styles } from "@/components/ui";
+import { ErrorText, InfoText, Loading } from "@/components/ui";
 
 export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -59,59 +59,72 @@ export default function ProductDetailPage() {
   if (error && !product) {
     return (
       <div>
+        <Link href="/" className="back-link">← Products</Link>
         <ErrorText>{error}</ErrorText>
-        <Link href="/">Back to products</Link>
       </div>
     );
   }
-  if (!product) return <p style={styles.muted}>Loading…</p>;
+  if (!product) return <Loading />;
 
   const outOfStock = available !== null && available <= 0;
 
   return (
     <div>
-      <p><Link href="/">← Products</Link></p>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 24 }}>
-        {product.imageUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={product.imageUrl} alt={product.name} style={{ width: 280, maxWidth: "100%", borderRadius: 6, objectFit: "cover" }} />
-        ) : (
-          <div style={{ width: 280, maxWidth: "100%", height: 200, background: "#f0f0f0", borderRadius: 6 }} />
-        )}
-        <div style={{ flex: "1 1 260px" }}>
-          <h1 style={{ marginTop: 0 }}>{product.name}</h1>
-          <p style={styles.muted}>{categoryName(product.categoryId)}</p>
-          <p style={{ fontSize: 20, fontWeight: 600 }}>{formatVnd(product.price)}</p>
-          <p>{product.description}</p>
-          <p>
+      <Link href="/" className="back-link">← Products</Link>
+      <div className="product-detail">
+        <div className="product-media">
+          {product.imageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={product.imageUrl} alt={product.name} />
+          ) : (
+            <div className="product-placeholder" aria-hidden="true">
+              <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <rect x="3" y="5" width="18" height="14" rx="2" />
+                <path d="m3 16 5-5 4 4 3-3 6 6" />
+                <circle cx="16" cy="9" r="1.5" />
+              </svg>
+            </div>
+          )}
+        </div>
+        <div>
+          <span className="product-category">{categoryName(product.categoryId)}</span>
+          <h1>{product.name}</h1>
+          <p className="price">{formatVnd(product.price)}</p>
+          {product.description && <p className="description">{product.description}</p>}
+          <p className="stock">
             {available === null ? (
-              <span style={styles.muted}>Checking stock…</span>
+              <span className="muted">Checking stock…</span>
             ) : outOfStock ? (
-              <strong style={{ color: "crimson" }}>Out of stock</strong>
+              <span className="stock-out">Out of stock</span>
             ) : (
-              <span>{available} left in stock</span>
+              <span className="stock-ok">✓ {available} in stock</span>
             )}
           </p>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <label>
-              Qty{" "}
+          <div className="row">
+            <label className="row" style={{ gap: 8 }}>
+              <span className="field-label">Qty</span>
               <input
                 type="number"
                 min={1}
                 max={available ?? undefined}
                 value={quantity}
                 onChange={(e) => setQuantity(Math.max(1, Number(e.target.value) || 1))}
-                style={{ ...styles.input, width: 72 }}
+                className="input input-inline"
+                style={{ width: 80 }}
                 disabled={outOfStock}
               />
             </label>
-            <button style={styles.primary} onClick={onAdd} disabled={!ready || busy || outOfStock}>
-              {ready && !user ? "Log in to add to cart" : "Add to cart"}
+            <button className="btn btn-primary" onClick={onAdd} disabled={!ready || busy || outOfStock}>
+              {ready && !user ? "Log in to add to cart" : busy ? "Adding…" : "Add to cart"}
             </button>
           </div>
-          <InfoText>{notice}</InfoText>
-          <ErrorText>{error}</ErrorText>
-          {notice && <p><Link href="/cart">Go to cart</Link></p>}
+          <div style={{ marginTop: 16 }}>
+            <InfoText>{notice}</InfoText>
+            <ErrorText>{error}</ErrorText>
+            {notice && (
+              <Link href="/cart" className="btn">Go to cart →</Link>
+            )}
+          </div>
         </div>
       </div>
     </div>

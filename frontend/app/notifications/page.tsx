@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { ApiError, errorMessage, getNotifications, type Notification } from "@/lib/api";
-import { ErrorText, formatDate, LoginPrompt, styles } from "@/components/ui";
+import { EmptyState, ErrorText, formatDate, Loading, LoginPrompt } from "@/components/ui";
 
 export default function NotificationsPage() {
   const [items, setItems] = useState<Notification[] | null>(null);
@@ -34,23 +34,34 @@ export default function NotificationsPage() {
 
   if (needsLogin) return <LoginPrompt next="/notifications" what="your notifications" />;
 
+  const unread = items?.filter((n) => !n.read).length ?? 0;
+
   return (
     <div>
-      <h1>Notifications</h1>
+      <div className="page-header">
+        <div>
+          <h1>Notifications</h1>
+          {items && items.length > 0 && (
+            <p className="subtitle">{unread > 0 ? `${unread} unread` : "All caught up"}</p>
+          )}
+        </div>
+      </div>
       <ErrorText>{error}</ErrorText>
-      {!items && !error && <p style={styles.muted}>Loading…</p>}
-      {items && items.length === 0 && <p>No notifications yet.</p>}
-      <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 8 }}>
+      {!items && !error && <Loading />}
+      {items && items.length === 0 && (
+        <EmptyState title="No notifications yet">Order and payment updates will appear here.</EmptyState>
+      )}
+      <ul className="stack" style={{ listStyle: "none", padding: 0, margin: 0, gap: 10 }}>
         {items?.map((n) => (
-          <li key={n.id} style={{ ...styles.card, background: n.read ? "#fff" : "#f0f6ff" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-              <strong>{n.title}</strong>
-              <span style={styles.muted}>{formatDate(n.createdAt)}</span>
+          <li key={n.id} className={`card card-sm notification${n.read ? "" : " unread"}`}>
+            <div className="row row-between">
+              <span className="title">{n.title}</span>
+              <span className="muted">{formatDate(n.createdAt)}</span>
             </div>
-            <div style={{ marginTop: 4 }}>{n.body}</div>
-            <div style={{ ...styles.muted, marginTop: 4 }}>
-              {n.type}
-              {!n.read && " · unread"}
+            <div>{n.body}</div>
+            <div className="meta">
+              <span>{n.type}</span>
+              {!n.read && <span>· unread</span>}
             </div>
           </li>
         ))}

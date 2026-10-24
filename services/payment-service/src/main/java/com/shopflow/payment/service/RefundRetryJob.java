@@ -5,7 +5,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/** Retries refunds whose provider call failed, so compensation eventually completes. */
+/**
+ * Executes queued refunds (first attempt and retries), so compensation
+ * eventually completes even when the bank is flaky. Polls often: a refund is
+ * normally sent within a few seconds of being requested.
+ */
 @Component
 public class RefundRetryJob {
 
@@ -17,11 +21,11 @@ public class RefundRetryJob {
         this.paymentService = paymentService;
     }
 
-    @Scheduled(fixedDelayString = "${shopflow.refund-retry.poll-ms:60000}", initialDelay = 30000)
+    @Scheduled(fixedDelayString = "${shopflow.refund-retry.poll-ms:5000}", initialDelay = 10000)
     public void run() {
-        int retried = paymentService.retryPendingRefunds();
-        if (retried > 0) {
-            log.info("Retried {} pending refund(s)", retried);
+        int processed = paymentService.processDueRefunds();
+        if (processed > 0) {
+            log.info("Processed {} refund(s)", processed);
         }
     }
 }

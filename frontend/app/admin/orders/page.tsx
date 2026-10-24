@@ -16,7 +16,7 @@ import {
   type OrderStatus,
 } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
-import { ErrorText, formatDate, StatusBadge, styles } from "@/components/ui";
+import { EmptyState, ErrorText, formatDate, Loading, StatusBadge } from "@/components/ui";
 
 const PAGE_SIZE = 20;
 
@@ -59,27 +59,34 @@ export default function AdminOrdersPage() {
     }
   }
 
-  if (!ready) return <p style={styles.muted}>Loading…</p>;
+  if (!ready) return <Loading />;
   if (!isAdmin) {
     return (
-      <div>
-        <h1>Admin orders</h1>
-        <p>
-          Admin only.{" "}
-          {!user && <Link href={`/login?next=${encodeURIComponent("/admin/orders")}`}>Log in as an admin</Link>}
-        </p>
-      </div>
+      <EmptyState title="Admin only">
+        <p>This page is restricted to administrators.</p>
+        {!user && (
+          <Link href={`/login?next=${encodeURIComponent("/admin/orders")}`} className="btn btn-primary">
+            Log in as an admin
+          </Link>
+        )}
+      </EmptyState>
     );
   }
 
   return (
     <div>
-      <h1>Admin orders</h1>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+      <div className="page-header">
+        <div>
+          <h1>Admin orders</h1>
+          <p className="subtitle">Ship paid orders, then mark them delivered.</p>
+        </div>
+        <button className="btn" onClick={() => setReload((n) => n + 1)}>Refresh</button>
+      </div>
+      <div className="toolbar">
         <label>
-          Status{" "}
+          Status
           <select
-            style={styles.input}
+            className="input"
             value={status}
             onChange={(e) => {
               setPage(0);
@@ -88,50 +95,49 @@ export default function AdminOrdersPage() {
           >
             <option value="">All</option>
             {ORDER_STATUSES.map((s) => (
-              <option key={s} value={s}>{s}</option>
+              <option key={s} value={s}>{s.replace("_", " ")}</option>
             ))}
           </select>
         </label>
-        <button style={styles.button} onClick={() => setReload((n) => n + 1)}>Refresh</button>
       </div>
       <ErrorText>{error}</ErrorText>
-      {!orders && !error && <p style={styles.muted}>Loading…</p>}
-      {orders && orders.length === 0 && <p>No orders.</p>}
+      {!orders && !error && <Loading />}
+      {orders && orders.length === 0 && <EmptyState title="No orders">Nothing matches this filter.</EmptyState>}
       {orders && orders.length > 0 && (
-        <div style={{ overflowX: "auto" }}>
-          <table style={styles.table}>
+        <div className="table-wrap">
+          <table className="table">
             <thead>
               <tr>
-                <th style={styles.cell}>Order</th>
-                <th style={styles.cell}>Placed</th>
-                <th style={styles.cell}>Status</th>
-                <th style={styles.cell}>Items</th>
-                <th style={styles.cell}>Total</th>
-                <th style={styles.cell}>Actions</th>
+                <th>Order</th>
+                <th>Placed</th>
+                <th>Status</th>
+                <th>Items</th>
+                <th className="num">Total</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {orders.map((o) => (
                 <tr key={o.id}>
-                  <td style={styles.cell}>#{o.id}</td>
-                  <td style={styles.cell}>{formatDate(o.createdAt)}</td>
-                  <td style={styles.cell}><StatusBadge status={o.status} /></td>
-                  <td style={styles.cell}>
+                  <td><strong>#{o.id}</strong></td>
+                  <td className="nowrap">{formatDate(o.createdAt)}</td>
+                  <td><StatusBadge status={o.status} /></td>
+                  <td>
                     {o.items.map((i) => (
-                      <div key={i.productId}>{i.productName} × {i.quantity}</div>
+                      <div key={i.productId} className="line">{i.productName} <span className="muted">× {i.quantity}</span></div>
                     ))}
                   </td>
-                  <td style={styles.cell}>{formatVnd(o.totalAmount, o.currency)}</td>
-                  <td style={{ ...styles.cell, whiteSpace: "nowrap" }}>
+                  <td className="num">{formatVnd(o.totalAmount, o.currency)}</td>
+                  <td className="actions">
                     <button
-                      style={styles.button}
+                      className="btn btn-sm"
                       disabled={o.status !== "PAID" || busy === o.id}
                       onClick={() => act(o, "ship")}
                     >
                       Ship
-                    </button>{" "}
+                    </button>
                     <button
-                      style={styles.button}
+                      className="btn btn-sm"
                       disabled={o.status !== "SHIPPED" || busy === o.id}
                       onClick={() => act(o, "deliver")}
                     >
@@ -144,10 +150,10 @@ export default function AdminOrdersPage() {
           </table>
         </div>
       )}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
-        <button style={styles.button} disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button>
+      <div className="pagination">
+        <button className="btn btn-sm" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button>
         <span>Page {page + 1}</span>
-        <button style={styles.button} disabled={!orders || orders.length < PAGE_SIZE} onClick={() => setPage(page + 1)}>Next</button>
+        <button className="btn btn-sm" disabled={!orders || orders.length < PAGE_SIZE} onClick={() => setPage(page + 1)}>Next</button>
       </div>
     </div>
   );

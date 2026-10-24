@@ -15,7 +15,7 @@ import {
   SETTLED_STATUSES,
   type Order,
 } from "@/lib/api";
-import { ErrorText, InfoText, LoginPrompt, StatusBadge, styles } from "@/components/ui";
+import { EmptyState, ErrorText, InfoText, Loading, LoginPrompt, StatusBadge } from "@/components/ui";
 
 const POLL_MS = 2000;
 const MAX_POLLS = 30; // ~60 s
@@ -99,9 +99,10 @@ function Checkout() {
 
   if (!orderId) {
     return (
-      <p>
-        No order selected. <Link href="/cart">Place an order from your cart first.</Link>
-      </p>
+      <EmptyState title="No order selected">
+        <p>Place an order from your cart first.</p>
+        <Link href="/cart" className="btn btn-primary">Go to cart</Link>
+      </EmptyState>
     );
   }
   if (needsLogin) return <LoginPrompt next={`/checkout?orderId=${orderId}`} what="this order" />;
@@ -111,52 +112,73 @@ function Checkout() {
 
   return (
     <div>
-      <h1>Checkout</h1>
+      <div className="page-header">
+        <div>
+          <h1>Checkout</h1>
+          {order && <p className="subtitle">Order #{order.id}</p>}
+        </div>
+        {order && <StatusBadge status={order.status} />}
+      </div>
       <ErrorText>{error}</ErrorText>
-      {!order && !error && <p style={styles.muted}>Loading order…</p>}
+      {!order && !error && <Loading>Loading order…</Loading>}
       {order && (
-        <>
-          <p>
-            Order #{order.id} — <StatusBadge status={order.status} />
-          </p>
-          <ul>
-            {order.items.map((i) => (
-              <li key={i.productId}>
-                {i.productName} × {i.quantity} — {formatVnd(i.unitPrice, order.currency)}
-              </li>
-            ))}
-          </ul>
-          <p><strong>Total: {formatVnd(order.totalAmount, order.currency)}</strong></p>
-
-          {status === "PENDING" && (
-            <p style={styles.muted}>
-              {polling ? "Reserving stock…" : timedOut ? "Still waiting for stock reservation." : "Waiting for stock reservation."}{" "}
-              {!polling && (
-                <button style={styles.button} onClick={() => setReload((n) => n + 1)}>Refresh</button>
-              )}
-            </p>
-          )}
-          {status === "STOCK_RESERVED" && !paid && <p>Stock is reserved. You can pay now.</p>}
-          {paid && status === "STOCK_RESERVED" && (
-            <p style={styles.muted}>
-              {polling ? "Waiting for payment confirmation…" : timedOut ? "The payment has not settled yet. Check My orders later." : ""}
-            </p>
-          )}
-          {status === "PAID" && <InfoText>Payment confirmed. Thank you for your order!</InfoText>}
-          {status === "CANCELLED" && <ErrorText>The order was cancelled{paid ? " (payment failed)" : ""}.</ErrorText>}
-          {status === "REFUNDED" && <InfoText>This order was refunded.</InfoText>}
-          {(status === "SHIPPED" || status === "DELIVERED") && <InfoText>This order is already paid and {status.toLowerCase()}.</InfoText>}
-
-          <InfoText>{notice}</InfoText>
-
-          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-            <button style={styles.primary} onClick={onPay} disabled={!canPay}>
-              {paying ? "Paying…" : "Pay"}
-            </button>
-            <Link href={`/orders/${order.id}`}>Order details</Link>
-            <Link href="/orders">My orders</Link>
+        <div className="summary">
+          <div className="card">
+            <h2>Items</h2>
+            <ul className="summary-list">
+              {order.items.map((i) => (
+                <li key={i.productId}>
+                  <span>{i.productName} <span className="muted">× {i.quantity}</span></span>
+                  <span>{formatVnd(i.unitPrice * i.quantity, order.currency)}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="summary-total">
+              <span>Total</span>
+              <span>{formatVnd(order.totalAmount, order.currency)}</span>
+            </div>
           </div>
-        </>
+
+          <div className="card">
+            <h2>Payment</h2>
+            {status === "PENDING" && (
+              <div className="timeline-note">
+                {polling && <span className="spinner" aria-hidden="true" />}
+                <span>
+                  {polling ? "Reserving stock…" : timedOut ? "Still waiting for stock reservation." : "Waiting for stock reservation."}
+                </span>
+                {!polling && (
+                  <button className="btn btn-sm" onClick={() => setReload((n) => n + 1)}>Refresh</button>
+                )}
+              </div>
+            )}
+            {status === "STOCK_RESERVED" && !paid && (
+              <div className="alert alert-note">Stock is reserved. You can pay now.</div>
+            )}
+            {paid && status === "STOCK_RESERVED" && (
+              <div className="timeline-note">
+                {polling && <span className="spinner" aria-hidden="true" />}
+                <span>
+                  {polling ? "Waiting for payment confirmation…" : timedOut ? "The payment has not settled yet. Check My orders later." : ""}
+                </span>
+              </div>
+            )}
+            {status === "PAID" && <InfoText>Payment confirmed. Thank you for your order!</InfoText>}
+            {status === "CANCELLED" && <ErrorText>The order was cancelled{paid ? " (payment failed)" : ""}.</ErrorText>}
+            {status === "REFUNDED" && <InfoText>This order was refunded.</InfoText>}
+            {(status === "SHIPPED" || status === "DELIVERED") && <InfoText>This order is already paid and {status.toLowerCase()}.</InfoText>}
+
+            <InfoText>{notice}</InfoText>
+
+            <button className="btn btn-primary btn-block" onClick={onPay} disabled={!canPay}>
+              {paying ? "Paying…" : `Pay ${formatVnd(order.totalAmount, order.currency)}`}
+            </button>
+            <div className="row" style={{ marginTop: 14, justifyContent: "center" }}>
+              <Link href={`/orders/${order.id}`} className="btn btn-ghost btn-sm">Order details</Link>
+              <Link href="/orders" className="btn btn-ghost btn-sm">My orders</Link>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

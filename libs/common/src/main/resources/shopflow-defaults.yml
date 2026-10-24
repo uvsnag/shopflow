@@ -9,6 +9,12 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
       acks: all
+      properties:
+        # NFR-08: broker-side de-duplication of producer retries, and at most
+        # 5 in-flight requests so a retried batch cannot overtake a later one
+        # (keeps per-key order, which the saga relies on).
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
     consumer:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer

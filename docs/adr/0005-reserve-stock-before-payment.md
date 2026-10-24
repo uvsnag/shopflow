@@ -25,8 +25,11 @@ job, expired-reservation job) guarantee holds never leak.
 ## Consequences
 
 - (+) A paid order always has its items; no "sorry, refund" mails.
-- (+) Overselling is impossible: reservation is guarded by optimistic
-  locking (`stock.version`).
+- (+) Overselling is impossible: the stock rows are locked
+  (`SELECT ... FOR UPDATE`, in product id order) while the reservation is
+  checked and written; `stock.version` remains as a safety net.
 - (−) Stock can be held for up to 15 minutes by someone who never pays.
-- (−) Two timers (order side, inventory side) must agree; drift between them
-  is the main known edge case (documented in architecture.md).
+- (−) Two timers (order side, inventory side). The inventory TTL (30 min) is
+  kept longer than the payment timeout (15 min) so it only catches lost
+  events and never takes stock from an order paid at the last second
+  (documented in architecture.md).

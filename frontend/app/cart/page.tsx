@@ -17,7 +17,7 @@ import {
   type Cart,
   type Product,
 } from "@/lib/api";
-import { ErrorText, LoginPrompt, styles } from "@/components/ui";
+import { EmptyState, ErrorText, Loading, LoginPrompt } from "@/components/ui";
 
 type Products = Record<number, Product | null>; // null = product no longer available
 
@@ -92,86 +92,99 @@ export default function CartPage() {
   if (needsLogin) return <LoginPrompt next="/cart" what="your cart" />;
 
   const total = cart?.items.reduce((sum, i) => sum + (products[i.productId]?.price ?? 0) * i.quantity, 0) ?? 0;
+  const count = cart?.items.reduce((n, i) => n + i.quantity, 0) ?? 0;
 
   return (
     <div>
-      <h1>Cart</h1>
+      <div className="page-header">
+        <div>
+          <h1>Cart</h1>
+          {cart && cart.items.length > 0 && <p className="subtitle">{count} item{count === 1 ? "" : "s"}</p>}
+        </div>
+        <Link href="/" className="btn btn-ghost">← Continue shopping</Link>
+      </div>
       <ErrorText>{error}</ErrorText>
-      {!cart && !error && <p style={styles.muted}>Loading…</p>}
+      {!cart && !error && <Loading />}
       {cart && cart.items.length === 0 && (
-        <p>
-          Your cart is empty. <Link href="/">Browse products</Link>
-        </p>
+        <EmptyState title="Your cart is empty">
+          <p>Add a few products and come back here to place your order.</p>
+          <Link href="/" className="btn btn-primary">Browse products</Link>
+        </EmptyState>
       )}
       {cart && cart.items.length > 0 && (
-        <div style={{ overflowX: "auto" }}>
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.cell}>Product</th>
-                <th style={styles.cell}>Price</th>
-                <th style={styles.cell}>Quantity</th>
-                <th style={styles.cell}>Subtotal</th>
-                <th style={styles.cell} />
-              </tr>
-            </thead>
-            <tbody>
-              {cart.items.map((i) => {
-                const p = products[i.productId];
-                const rowBusy = busy === i.productId;
-                return (
-                  <tr key={i.productId}>
-                    <td style={styles.cell}>
-                      {p ? (
-                        <Link href={`/products/${p.id}`}>{p.name}</Link>
-                      ) : p === null ? (
-                        <span style={styles.muted}>Product #{i.productId} (no longer available)</span>
-                      ) : (
-                        <span style={styles.muted}>Product #{i.productId}…</span>
-                      )}
-                    </td>
-                    <td style={styles.cell}>{p ? formatVnd(p.price) : "—"}</td>
-                    <td style={{ ...styles.cell, whiteSpace: "nowrap" }}>
-                      <button style={styles.button} disabled={rowBusy} onClick={() => changeQuantity(i.productId, i.quantity - 1)}>−</button>
-                      <input
-                        type="number"
-                        min={0}
-                        value={i.quantity}
-                        disabled={rowBusy}
-                        onChange={(e) => {
-                          const q = Number(e.target.value);
-                          if (Number.isInteger(q) && q >= 0) changeQuantity(i.productId, q);
-                        }}
-                        style={{ ...styles.input, width: 60, margin: "0 6px", textAlign: "center" }}
-                      />
-                      <button style={styles.button} disabled={rowBusy} onClick={() => changeQuantity(i.productId, i.quantity + 1)}>+</button>
-                    </td>
-                    <td style={styles.cell}>{p ? formatVnd(p.price * i.quantity) : "—"}</td>
-                    <td style={styles.cell}>
-                      <button style={styles.button} disabled={rowBusy} onClick={() => changeQuantity(i.productId, 0)}>Remove</button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            <tfoot>
-              <tr>
-                <td style={styles.cell} colSpan={3}><strong>Total</strong></td>
-                <td style={styles.cell} colSpan={2}><strong>{formatVnd(total)}</strong></td>
-              </tr>
-            </tfoot>
-          </table>
+        <div className="summary">
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th className="num">Price</th>
+                  <th>Quantity</th>
+                  <th className="num">Subtotal</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {cart.items.map((i) => {
+                  const p = products[i.productId];
+                  const rowBusy = busy === i.productId;
+                  return (
+                    <tr key={i.productId}>
+                      <td>
+                        {p ? (
+                          <Link href={`/products/${p.id}`}>{p.name}</Link>
+                        ) : p === null ? (
+                          <span className="muted">Product #{i.productId} (no longer available)</span>
+                        ) : (
+                          <span className="muted">Product #{i.productId}…</span>
+                        )}
+                      </td>
+                      <td className="num">{p ? formatVnd(p.price) : "—"}</td>
+                      <td className="nowrap">
+                        <span className="qty">
+                          <button type="button" aria-label="Decrease" disabled={rowBusy} onClick={() => changeQuantity(i.productId, i.quantity - 1)}>−</button>
+                          <input
+                            type="number"
+                            min={0}
+                            value={i.quantity}
+                            disabled={rowBusy}
+                            aria-label="Quantity"
+                            onChange={(e) => {
+                              const q = Number(e.target.value);
+                              if (Number.isInteger(q) && q >= 0) changeQuantity(i.productId, q);
+                            }}
+                          />
+                          <button type="button" aria-label="Increase" disabled={rowBusy} onClick={() => changeQuantity(i.productId, i.quantity + 1)}>+</button>
+                        </span>
+                      </td>
+                      <td className="num">{p ? formatVnd(p.price * i.quantity) : "—"}</td>
+                      <td className="actions">
+                        <button className="btn btn-ghost btn-sm" disabled={rowBusy} onClick={() => changeQuantity(i.productId, 0)}>Remove</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="card">
+            <h2>Order summary</h2>
+            <ul className="summary-list">
+              <li><span>Items</span><span>{count}</span></li>
+              <li><span>Shipping</span><span className="muted">Free</span></li>
+            </ul>
+            <div className="summary-total"><span>Total</span><span>{formatVnd(total)}</span></div>
+            <button
+              className="btn btn-primary btn-block"
+              style={{ marginTop: 16 }}
+              onClick={checkout}
+              disabled={!cart || cart.items.length === 0 || busy !== null}
+            >
+              {busy === "order" ? "Placing order…" : "Place order"}
+            </button>
+          </div>
         </div>
       )}
-      <p>
-        <button
-          style={styles.primary}
-          onClick={checkout}
-          disabled={!cart || cart.items.length === 0 || busy !== null}
-        >
-          {busy === "order" ? "Placing order…" : "Place order"}
-        </button>
-      </p>
     </div>
   );
 }

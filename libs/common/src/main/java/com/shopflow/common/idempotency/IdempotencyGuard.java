@@ -1,9 +1,15 @@
 package com.shopflow.common.idempotency;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.UUID;
 
 /**
@@ -23,19 +29,41 @@ import java.util.UUID;
  *   <li>the mark commits or rolls back together with the business change —
  *       a failed handler is retried, never skipped as a false duplicate.</li>
  * </ul>
+ * {@link Propagation#MANDATORY}: called outside a transaction the mark would
+ * commit on its own, before the business change — a crash in between would
+ * then lose the event as a "duplicate". Failing fast makes that bug visible.
  */
 @Service
 public class IdempotencyGuard {
 
-    private final ProcessedEventRepository repository;
+    private static final Logger log = LoggerFactory.getLogger(IdempotencyGuard.class);
 
-    public IdempotencyGuard(ProcessedEventRepository repository) {
+    private final ProcessedEventRepository repository;
+    private final Duration retention;
+
+    public IdempotencyGuard(ProcessedEventRepository repository,
+                            @Value("${shopflow.processed-events.retention:14d}") Duration retention) {
         this.repository = repository;
+        this.retention = retention;
     }
 
     /** @return true if this is the first time we see the event. */
-    @Transactional(propagation = Propagation.REQUIRED)
+    @Transactional(propagation = Propagation.MANDATORY)
     public boolean markProcessed(UUID eventId) {
         return repository.insertIfAbsent(eventId) == 1;
+    }
+
+    /**
+     * Keeps processed_events from growing forever. The retention must stay
+     * longer than the Kafka topic retention (7 days by default): an event can
+     * only be redelivered while it still exists in the topic.
+     */
+    @Scheduled(fixedDelayString = "${shopflow.processed-events.cleanup-poll-ms:3600000}", initialDelay = 90000)
+    @Transactional
+    public void deleteOldMarks() {
+        int deleted = repository.deleteProcessedBefore(Instant.now().minus(retention));
+        if (deleted > 0) {
+            log.info("Deleted {} processed_events mark(s) older than {}", deleted, retention);
+        }
     }
 }

@@ -25,7 +25,7 @@ shopflow:
   webhook-url: ${WEBHOOK_URL:http://localhost:8085/payments/webhook}
   webhook-secret: ${WEBHOOK_SECRET:local-dev-secret}   # NFR-07: env var, never in Git for real secrets
   refund-retry:
-    poll-ms: 60000
+    poll-ms: 5000
     max-attempts: 5
 
 # NFR-11: 3 attempts with backoff + circuit breaker (3s timeout is on the RestClient)

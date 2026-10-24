@@ -28,7 +28,7 @@ Traceability for the IDs in [ShopFlow_Project_Plan.md](../ShopFlow_Project_Plan.
 
 | ID | Where | Verified by |
 | --- | --- | --- |
-| BR-01 only with enough stock | `InventoryService.reserveForOrder` (check pass, then mutate) + `@Version` | `InventoryServiceTest`, `ConcurrentReservationIT` |
+| BR-01 only with enough stock | `InventoryService.reserveForOrder` (stock rows locked FOR UPDATE, check pass, then mutate) | `InventoryServiceTest`, `ConcurrentReservationIT` |
 | BR-02 reserve / release | `InventoryService`, `ExpiredReservationJob` | `InventoryServiceTest`, `StockTest` |
 | BR-03 15-min auto cancel | `OrderTimeoutJob` | `OrderTimeoutJobTest` |
 | BR-04 never charged twice | unique `payments.order_id` + `idempotency_key`, row committed before charge | `PaymentServiceTest` |

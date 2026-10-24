@@ -237,7 +237,7 @@ Each service has its own tables. When one service needs data from another, it sa
 
 **Key points to notice:**
 
-- `stock.version` and `orders.version` use **optimistic locking**. Two people buying the last item at the same time cannot both win.
+- Writes lock the rows they change (`SELECT ... FOR UPDATE`): stock rows when reserving, the order row on every status change, the payment row on every payment change. Two people buying the last item at the same time cannot both win. `stock.version` and `orders.version` (**optimistic locking**) stay as a safety net.
 - `payments.order_id` is unique. The database itself blocks a second payment for the same order (BR-04).
 - `outbox` and `processed_events` make events safe. See the Non-functional requirements section.
 
@@ -284,7 +284,7 @@ Every event has the same envelope: `eventId`, `eventType`, `occurredAt`, `orderI
 | payment-events | PaymentFailed | payment | order, notification |
 | payment-events | PaymentRefunded | payment | order, notification |
 
-Each topic also has a dead letter topic (for example `order-events.DLT`). Messages that fail 3 times go there so they don't block the line.
+Each topic also has a dead letter topic (for example `order-events.DLT`). Messages that still fail after retries with backoff (about 15 seconds; malformed messages at once) go there so they don't block the line.
 
 ## Non-functional requirements
 

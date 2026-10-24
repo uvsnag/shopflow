@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { ApiError, errorMessage, login } from "@/lib/api";
-import { ErrorText, InfoText, styles } from "@/components/ui";
+import { ErrorText, InfoText } from "@/components/ui";
 
 function LoginForm() {
   const router = useRouter();
@@ -46,23 +46,26 @@ function LoginForm() {
   }
 
   return (
-    <form onSubmit={onSubmit} noValidate style={{ display: "grid", gap: 12, maxWidth: 360 }}>
-      <h1>Log in</h1>
+    <form onSubmit={onSubmit} noValidate className="card auth-card stack">
+      <div>
+        <h1>Welcome back</h1>
+        <p className="lead">Log in to your ShopFlow account.</p>
+      </div>
       {justRegistered && <InfoText>Account created. Please log in.</InfoText>}
-      <label style={{ display: "grid", gap: 4 }}>
-        <span>Email</span>
-        <input style={styles.input} type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" required />
-        {fieldErrors.email && <span style={{ color: "crimson", fontSize: 13 }}>{fieldErrors.email}</span>}
-      </label>
-      <label style={{ display: "grid", gap: 4 }}>
-        <span>Password</span>
-        <input style={styles.input} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
-        {fieldErrors.password && <span style={{ color: "crimson", fontSize: 13 }}>{fieldErrors.password}</span>}
-      </label>
-      <button type="submit" style={styles.primary} disabled={busy}>{busy ? "Logging in…" : "Log in"}</button>
       <ErrorText>{error}</ErrorText>
-      <p style={styles.muted}>
-        No account yet? <Link href={`/register?next=${encodeURIComponent(next)}`}>Register</Link>
+      <label className="field">
+        <span>Email</span>
+        <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" placeholder="you@example.com" required />
+        {fieldErrors.email && <span className="field-error">{fieldErrors.email}</span>}
+      </label>
+      <label className="field">
+        <span>Password</span>
+        <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
+        {fieldErrors.password && <span className="field-error">{fieldErrors.password}</span>}
+      </label>
+      <button type="submit" className="btn btn-primary btn-block" disabled={busy}>{busy ? "Logging in…" : "Log in"}</button>
+      <p className="switch">
+        No account yet? <Link href={`/register?next=${encodeURIComponent(next)}`}>Create one</Link>
       </p>
     </form>
   );

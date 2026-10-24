@@ -20,7 +20,7 @@ import {
   type ProductInput,
 } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
-import { ErrorText, InfoText, styles } from "@/components/ui";
+import { EmptyState, ErrorText, InfoText, Loading } from "@/components/ui";
 
 const emptyForm = { categoryId: "1", name: "", description: "", price: "", imageUrl: "", active: true };
 type FormState = typeof emptyForm;
@@ -142,16 +142,17 @@ export default function AdminProductsPage() {
     }
   }
 
-  if (!ready) return <p style={styles.muted}>Loading…</p>;
+  if (!ready) return <Loading />;
   if (!isAdmin) {
     return (
-      <div>
-        <h1>Admin products</h1>
-        <p>
-          Admin only.{" "}
-          {!user && <Link href={`/login?next=${encodeURIComponent("/admin/products")}`}>Log in as an admin</Link>}
-        </p>
-      </div>
+      <EmptyState title="Admin only">
+        <p>This page is restricted to administrators.</p>
+        {!user && (
+          <Link href={`/login?next=${encodeURIComponent("/admin/products")}`} className="btn btn-primary">
+            Log in as an admin
+          </Link>
+        )}
+      </EmptyState>
     );
   }
 
@@ -160,103 +161,116 @@ export default function AdminProductsPage() {
 
   return (
     <div>
-      <h1>Admin products</h1>
+      <div className="page-header">
+        <div>
+          <h1>Admin products</h1>
+          <p className="subtitle">Create and edit products, manage stock.</p>
+        </div>
+      </div>
 
-      <form onSubmit={onSubmit} style={{ ...styles.card, display: "grid", gap: 8, maxWidth: 480, marginBottom: 24 }}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>{editingId === null ? "Create product" : `Edit product #${editingId}`}</h2>
-        <label style={{ display: "grid", gap: 4 }}>
-          Category
-          <select style={styles.input} value={form.categoryId} onChange={set("categoryId")}>
+      <form onSubmit={onSubmit} className="card stack" style={{ maxWidth: 560 }}>
+        <h2 style={{ margin: 0 }}>{editingId === null ? "Create product" : `Edit product #${editingId}`}</h2>
+        <ErrorText>{formError}</ErrorText>
+        <InfoText>{formNotice}</InfoText>
+        <label className="field">
+          <span>Category</span>
+          <select className="input" value={form.categoryId} onChange={set("categoryId")}>
             {CATEGORIES.map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
         </label>
-        <label style={{ display: "grid", gap: 4 }}>
-          Name
-          <input style={styles.input} value={form.name} onChange={set("name")} required />
+        <label className="field">
+          <span>Name</span>
+          <input className="input" value={form.name} onChange={set("name")} required />
         </label>
-        <label style={{ display: "grid", gap: 4 }}>
-          Description
-          <textarea style={{ ...styles.input, minHeight: 60 }} value={form.description} onChange={set("description")} />
+        <label className="field">
+          <span>Description</span>
+          <textarea className="input" value={form.description} onChange={set("description")} />
         </label>
-        <label style={{ display: "grid", gap: 4 }}>
-          Price (VND)
-          <input style={styles.input} type="number" min={0} step={1} value={form.price} onChange={set("price")} required />
+        <label className="field">
+          <span>Price (VND)</span>
+          <input className="input" type="number" min={0} step={1} value={form.price} onChange={set("price")} required />
         </label>
-        <label style={{ display: "grid", gap: 4 }}>
-          Image URL (optional)
-          <input style={styles.input} value={form.imageUrl} onChange={set("imageUrl")} />
+        <label className="field">
+          <span>Image URL (optional)</span>
+          <input className="input" value={form.imageUrl} onChange={set("imageUrl")} placeholder="https://…" />
         </label>
-        <label>
+        <label className="checkbox">
           <input type="checkbox" checked={form.active} onChange={set("active")} /> Active (visible in the shop)
         </label>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button type="submit" style={styles.primary} disabled={busy === "form"}>
-            {busy === "form" ? "Saving…" : editingId === null ? "Create" : "Save"}
+        <div className="row">
+          <button type="submit" className="btn btn-primary" disabled={busy === "form"}>
+            {busy === "form" ? "Saving…" : editingId === null ? "Create product" : "Save changes"}
           </button>
           {editingId !== null && (
-            <button type="button" style={styles.button} onClick={resetForm}>Cancel edit</button>
+            <button type="button" className="btn btn-ghost" onClick={resetForm}>Cancel edit</button>
           )}
         </div>
-        <ErrorText>{formError}</ErrorText>
-        <InfoText>{formNotice}</InfoText>
       </form>
 
-      <h2 style={{ fontSize: 18 }}>Products</h2>
-      <ErrorText>{listError}</ErrorText>
-      {!products && !listError && <p style={styles.muted}>Loading…</p>}
-      {products && products.length === 0 && <p>No visible products.</p>}
-      {products && products.length > 0 && (
-        <div style={{ overflowX: "auto" }}>
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.cell}>ID</th>
-                <th style={styles.cell}>Name</th>
-                <th style={styles.cell}>Category</th>
-                <th style={styles.cell}>Price</th>
-                <th style={styles.cell}>Stock</th>
-                <th style={styles.cell}>Add stock</th>
-                <th style={styles.cell}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {products.map((p) => (
-                <tr key={p.id}>
-                  <td style={styles.cell}>{p.id}</td>
-                  <td style={styles.cell}>
-                    <Link href={`/products/${p.id}`}>{p.name}</Link>
-                    {rowMessage[p.id] && (
-                      <div style={{ fontSize: 12, color: rowMessage[p.id].startsWith("Stock:") ? "#065f46" : "crimson" }}>
-                        {rowMessage[p.id]}
-                      </div>
-                    )}
-                  </td>
-                  <td style={styles.cell}>{categoryName(p.categoryId)}</td>
-                  <td style={styles.cell}>{formatVnd(p.price)}</td>
-                  <td style={styles.cell}>{stock[p.id] ?? "…"}</td>
-                  <td style={{ ...styles.cell, whiteSpace: "nowrap" }}>
-                    <input
-                      type="number"
-                      min={1}
-                      placeholder="qty"
-                      value={stockQty[p.id] ?? ""}
-                      onChange={(e) => setStockQty((m) => ({ ...m, [p.id]: e.target.value }))}
-                      style={{ ...styles.input, width: 70, marginRight: 6 }}
-                    />
-                    <button style={styles.button} disabled={busy === p.id} onClick={() => onAddStock(p)}>Add</button>
-                  </td>
-                  <td style={{ ...styles.cell, whiteSpace: "nowrap" }}>
-                    <button style={styles.button} disabled={busy === p.id} onClick={() => startEdit(p)}>Edit</button>{" "}
-                    <button style={styles.button} disabled={busy === p.id} onClick={() => onHide(p)}>Hide</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div className="section">
+        <div className="page-header">
+          <h2 style={{ margin: 0 }}>Products</h2>
+          {products && <span className="muted">{products.length} visible</span>}
         </div>
-      )}
+        <ErrorText>{listError}</ErrorText>
+        {!products && !listError && <Loading />}
+        {products && products.length === 0 && <EmptyState title="No visible products">Create the first one above.</EmptyState>}
+        {products && products.length > 0 && (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Name</th>
+                  <th>Category</th>
+                  <th className="num">Price</th>
+                  <th className="num">Stock</th>
+                  <th>Add stock</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {products.map((p) => (
+                  <tr key={p.id}>
+                    <td className="muted">{p.id}</td>
+                    <td>
+                      <Link href={`/products/${p.id}`}>{p.name}</Link>
+                      {rowMessage[p.id] && (
+                        <div className={`sub ${rowMessage[p.id].startsWith("Stock:") ? "hint-ok" : "hint-error"}`}>
+                          {rowMessage[p.id]}
+                        </div>
+                      )}
+                    </td>
+                    <td>{categoryName(p.categoryId)}</td>
+                    <td className="num">{formatVnd(p.price)}</td>
+                    <td className="num">{stock[p.id] ?? "…"}</td>
+                    <td className="nowrap">
+                      <span className="row" style={{ gap: 6, flexWrap: "nowrap" }}>
+                        <input
+                          type="number"
+                          min={1}
+                          placeholder="qty"
+                          value={stockQty[p.id] ?? ""}
+                          onChange={(e) => setStockQty((m) => ({ ...m, [p.id]: e.target.value }))}
+                          className="input input-sm input-inline"
+                          style={{ width: 76 }}
+                        />
+                        <button className="btn btn-sm" disabled={busy === p.id} onClick={() => onAddStock(p)}>Add</button>
+                      </span>
+                    </td>
+                    <td className="actions">
+                      <button className="btn btn-sm" disabled={busy === p.id} onClick={() => startEdit(p)}>Edit</button>
+                      <button className="btn btn-sm btn-danger" disabled={busy === p.id} onClick={() => onHide(p)}>Hide</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

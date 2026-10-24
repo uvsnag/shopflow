@@ -31,15 +31,44 @@ This file is the short version for someone reading the code. Diagrams are in
   commit or roll back together. A handler crash therefore rolls back the
   dedup mark too, and the redelivery is processed — never skipped as a
   false duplicate.
-- **Retries + DLT**: a message that still fails after 3 attempts goes to
-  `<topic>.DLT` (`KafkaErrorHandlingConfig` in libs/common) so it never
-  blocks the partition.
-- **Races**: concurrent "buy the last item" is settled by `stock.version`
-  (optimistic locking) — the losing transaction rolls back completely and
-  the redelivery sees fresh stock. Concurrent double-pay is settled by the
-  DB: the payment row (unique `(user_id, idempotency_key)` AND unique
-  `order_id`) is committed BEFORE the provider is charged. Version
-  conflicts surface to clients as a 409, never a 500.
+- **Retries + DLT**: transient failures are retried with exponential backoff
+  (0.5 s … 8 s, 6 attempts, ~15 s); poison messages (unparseable JSON,
+  non-numeric ids) skip the retries. Either way a message that cannot be
+  handled goes to `<topic>.DLT` (`KafkaErrorHandlingConfig` in libs/common)
+  so it never blocks the partition.
+- **Outbox publisher**: one replica per service publishes at a time
+  (`pg_try_advisory_xact_lock`), so scaling a service out neither duplicates
+  events nor lets two replicas interleave one order's events. Rows are
+  marked sent only after the broker acks (at-least-once, absorbed by
+  `processed_events`); the producer is idempotent with ≤ 5 in-flight
+  requests, so a retried batch cannot overtake a later one. Sent outbox rows
+  (7 d) and old `processed_events` marks (14 d, longer than Kafka's 7-day
+  retention) are deleted by housekeeping jobs.
+- **Row locks, not version conflicts**: every write path locks what it
+  changes with `SELECT ... FOR UPDATE` before reading it — the order row in
+  order-service, the payment row in payment-service, the reservation lines
+  and then the stock rows (in product id order, so no deadlocks) in
+  inventory-service. Saga events from two topics, the timeout jobs, the
+  customer and the admin therefore run one after another on fresh data
+  instead of failing on `@Version` and burning Kafka retries; a hot product
+  no longer pushes orders to the DLT. `@Version` stays as a safety net and
+  surfaces to clients as a 409, never a 500. Concurrent "buy the last item":
+  the second order waits for the stock row lock, sees the first one's
+  reservation and gets a clean `StockReservationFailed`.
+- **Saga events are applied tolerantly**: events for one order come from
+  different topics, so they can arrive after order-service already moved on
+  (e.g. `StockReserved` after the customer cancelled). Such stale events are
+  logged and ignored rather than thrown — retrying can never make them valid.
+  A `PaymentSucceeded` that overtakes `StockReserved` pays the order (payment
+  is only accepted once stock is reserved). Commands from people (ship,
+  cancel) stay strict and answer 409.
+- **Placing an order**: product prices are fetched before the transaction
+  opens (no DB connection held during the HTTP call); the transaction then
+  locks the cart, re-checks the Idempotency-Key and that the cart still
+  matches what was priced. Two checkouts of one cart cannot both succeed.
+- **Double pay**: settled by the DB — the payment row (unique
+  `(user_id, idempotency_key)` AND unique `order_id`) is committed BEFORE
+  the provider is charged.
 - **Idempotency keys are insert-first, never check-then-insert**: a
   `SELECT` before the `INSERT` is only a fast path, because two requests can
   both miss it. The unique constraint is the arbiter: the loser of the race
@@ -58,15 +87,28 @@ This file is the short version for someone reading the code. Diagrams are in
   order `CANCELLED`, writes a history row and re-emits `OrderCancelled`;
   payment-service refunds, inventory has nothing left to release. Money
   never stays with us for a cancelled order.
-- **Refund retry**: a refund whose provider call fails stays `PENDING` and
-  `RefundRetryJob` retries it every minute, up to 5 attempts, then marks it
-  `FAILED` for a human. `PaymentRefunded` is only emitted on success, so
-  stock is returned exactly once.
+- **Refunds are a queued command**: the decision to refund inserts a
+  `PENDING` refund row in the caller's transaction (atomic with the Kafka
+  dedup mark); `RefundRetryJob` (every 5 s) calls the bank outside any
+  transaction and settles under the payment row lock, only if the refund is
+  still `PENDING`. Failures back off (10 s, 20 s, … ≤ 10 min) up to 5
+  attempts, then `FAILED` for a human. A partial unique index allows one
+  `PENDING`/`SUCCEEDED` refund per payment, so a payment is never refunded
+  twice. `PaymentRefunded` is only emitted on success.
+- **Admin refund returns stock**: `PaymentRefunded` for a `PAID` order moves
+  it to `REFUNDED` and emits `OrderCancelled`, which is how inventory puts
+  the sold items back. Refunds of shipped/delivered orders are only noted in
+  the order history (the goods are with the customer).
 - **Refund returns stock**: a `CONFIRMED` reservation (paid, then refunded)
   goes back to `available`; a `RESERVED` one moves reserved → available.
 - **Provider resilience** (NFR-11): 3 s timeout, 3 attempts with
   exponential backoff, circuit breaker (Resilience4j); the fake provider
-  also retries its webhook with backoff, like a real bank.
+  also retries its webhook with backoff, like a real bank. Retrying a
+  money-moving call is safe because every charge / refund carries an
+  `Idempotency-Key` (`payment-<id>`, `refund-<id>`) the provider de-duplicates
+  on. If our charge call gives up but the bank did charge, the late success
+  webhook flips the payment from `FAILED` to `SUCCEEDED`; order-service sees
+  a cancelled order and the late-payment path refunds it.
 
 ## Observability
 
@@ -86,8 +128,13 @@ This file is the short version for someone reading the code. Diagrams are in
 
 ## Known edge cases (accepted for the demo, documented on purpose)
 
-- The order-side timeout job and the inventory-side reservation TTL are two
-  independent 15-minute clocks; they can drift by one poll interval.
+- The inventory reservation TTL (30 min) is a safety net only and is kept
+  longer than the 15-minute payment timeout, so a payment at minute 14:59
+  still finds its stock. If order-service's timeout job were down for more
+  than 15 extra minutes, a paid order could find its reservation released;
+  inventory logs it and does not take the stock again (that could oversell).
+- A payment can be accepted for an order that is cancelled a moment later
+  (snapshot check, then cancel); the late-payment path refunds it.
 - Access tokens cannot be revoked before their 15-minute expiry (ADR 0006).
 - Order snapshot in payment-service is eventually consistent: paying in
   the ~1 s before `OrderCreated`/`StockReserved` arrive returns a 409 and

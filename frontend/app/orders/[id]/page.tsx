@@ -7,7 +7,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, CANCELLABLE_STATUSES, cancelOrder, errorMessage, formatVnd, getOrder, type Order } from "@/lib/api";
-import { ErrorText, formatDate, InfoText, LoginPrompt, StatusBadge, styles } from "@/components/ui";
+import { ErrorText, formatDate, InfoText, Loading, LoginPrompt, StatusBadge } from "@/components/ui";
 
 export default function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -61,68 +61,70 @@ export default function OrderDetailPage() {
   if (error && !order) {
     return (
       <div>
+        <Link href="/orders" className="back-link">← My orders</Link>
         <ErrorText>{error}</ErrorText>
-        <Link href="/orders">← My orders</Link>
       </div>
     );
   }
-  if (!order) return <p style={styles.muted}>Loading…</p>;
+  if (!order) return <Loading />;
 
   const cancellable = CANCELLABLE_STATUSES.includes(order.status);
 
   return (
     <div>
-      <p><Link href="/orders">← My orders</Link></p>
-      <h1 style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        Order #{order.id} <StatusBadge status={order.status} />
-      </h1>
-      <p style={styles.muted}>Placed {formatDate(order.createdAt)}</p>
+      <Link href="/orders" className="back-link">← My orders</Link>
+      <div className="page-header">
+        <div>
+          <h1 className="row" style={{ gap: 12 }}>
+            Order #{order.id} <StatusBadge status={order.status} />
+          </h1>
+          <p className="subtitle">Placed {formatDate(order.createdAt)}</p>
+        </div>
+        <div className="row">
+          {order.status === "STOCK_RESERVED" && (
+            <Link href={`/checkout?orderId=${order.id}`} className="btn btn-primary">Pay now</Link>
+          )}
+          {cancellable && (
+            <button className="btn btn-danger" onClick={onCancel} disabled={busy}>
+              {busy ? "Cancelling…" : order.status === "PAID" ? "Cancel order (refund)" : "Cancel order"}
+            </button>
+          )}
+          <button className="btn btn-ghost" onClick={load} disabled={busy}>Refresh</button>
+        </div>
+      </div>
       <ErrorText>{error}</ErrorText>
       <InfoText>{notice}</InfoText>
+      {order.status === "PENDING" && (
+        <div className="alert alert-note">Stock is being reserved. Refresh in a moment to pay.</div>
+      )}
 
-      <div style={{ overflowX: "auto" }}>
-        <table style={styles.table}>
+      <div className="table-wrap">
+        <table className="table">
           <thead>
             <tr>
-              <th style={styles.cell}>Product</th>
-              <th style={styles.cell}>Unit price</th>
-              <th style={styles.cell}>Qty</th>
-              <th style={styles.cell}>Subtotal</th>
+              <th>Product</th>
+              <th className="num">Unit price</th>
+              <th className="num">Qty</th>
+              <th className="num">Subtotal</th>
             </tr>
           </thead>
           <tbody>
             {order.items.map((i) => (
               <tr key={i.productId}>
-                <td style={styles.cell}><Link href={`/products/${i.productId}`}>{i.productName}</Link></td>
-                <td style={styles.cell}>{formatVnd(i.unitPrice, order.currency)}</td>
-                <td style={styles.cell}>{i.quantity}</td>
-                <td style={styles.cell}>{formatVnd(i.unitPrice * i.quantity, order.currency)}</td>
+                <td><Link href={`/products/${i.productId}`}>{i.productName}</Link></td>
+                <td className="num">{formatVnd(i.unitPrice, order.currency)}</td>
+                <td className="num">{i.quantity}</td>
+                <td className="num">{formatVnd(i.unitPrice * i.quantity, order.currency)}</td>
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr>
-              <td style={styles.cell} colSpan={3}><strong>Total</strong></td>
-              <td style={styles.cell}><strong>{formatVnd(order.totalAmount, order.currency)}</strong></td>
+              <td colSpan={3}>Total</td>
+              <td className="num">{formatVnd(order.totalAmount, order.currency)}</td>
             </tr>
           </tfoot>
         </table>
-      </div>
-
-      {order.status === "PENDING" && <p style={styles.muted}>Stock is being reserved. Refresh in a moment to pay.</p>}
-
-      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
-        {order.status === "STOCK_RESERVED" && (
-          <Link href={`/checkout?orderId=${order.id}`} style={{ ...styles.primary, textDecoration: "none", display: "inline-block" }}>
-            Pay now
-          </Link>
-        )}
-        {cancellable && (
-          <button style={styles.button} onClick={onCancel} disabled={busy}>
-            {busy ? "Cancelling…" : order.status === "PAID" ? "Cancel order (refund)" : "Cancel order"}
-          </button>
-        )}
-        <button style={styles.button} onClick={load} disabled={busy}>Refresh</button>
       </div>
     </div>
   );

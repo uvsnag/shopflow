@@ -25,7 +25,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Must-have test case: two customers buy the last item at the same time —
- * only one order gets it (BR-01, optimistic locking on stock.version).
+ * only one order gets it (BR-01). The stock row is locked FOR UPDATE, so the
+ * loser waits, then sees the winner's reservation and fails cleanly with a
+ * StockReservationFailed event — no lock exception, no Kafka retry needed.
  * Real PostgreSQL via Testcontainers; skipped when Docker is not available.
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -93,7 +95,10 @@ class ConcurrentReservationIT {
                 .filter(e -> e.getAggregateId().startsWith("race-") && e.getEventType().equals(EventTypes.STOCK_RESERVED))
                 .count();
         assertEquals(1, reservedEvents, "exactly one StockReserved event");
-        assertTrue(lockConflicts.get() <= 1,
-                "the loser either saw fresh stock (clean failure event) or hit the version check");
+        long failedEvents = outboxRepository.findAll().stream()
+                .filter(e -> e.getAggregateId().startsWith("race-") && e.getEventType().equals(EventTypes.STOCK_RESERVATION_FAILED))
+                .count();
+        assertEquals(1, failedEvents, "the loser got a clean StockReservationFailed");
+        assertEquals(0, lockConflicts.get(), "row lock: the loser waited instead of failing on @Version");
     }
 }

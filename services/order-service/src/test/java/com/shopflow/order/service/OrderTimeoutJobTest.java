@@ -1,12 +1,11 @@
 package com.shopflow.order.service;
 
-import com.shopflow.order.domain.Order;
 import com.shopflow.order.domain.OrderStatus;
 import com.shopflow.order.repository.OrderRepository;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.*;
@@ -21,23 +20,26 @@ class OrderTimeoutJobTest {
 
     @Test
     void cancelsEveryStaleOrderEvenIfOneFails() {
-        Order a = order(1L);
-        Order b = order(2L);
-        when(repository.findByStatusInAndCreatedAtBefore(
+        when(repository.findIdsByStatusInAndCreatedAtBefore(
                 eq(List.of(OrderStatus.PENDING, OrderStatus.STOCK_RESERVED)), any()))
-                .thenReturn(List.of(a, b));
-        doThrow(new IllegalStateException("already paid"))
-                .when(orderService).changeStatus(1L, OrderStatus.CANCELLED, "payment timeout");
+                .thenReturn(List.of(1L, 2L));
+        doThrow(new RuntimeException("lock timeout"))
+                .when(orderService).cancelIfUnpaid(eq(1L), any(Instant.class));
 
         job.cancelUnpaidOrders();
 
-        verify(orderService).changeStatus(1L, OrderStatus.CANCELLED, "payment timeout");
-        verify(orderService).changeStatus(2L, OrderStatus.CANCELLED, "payment timeout");
+        verify(orderService).cancelIfUnpaid(eq(1L), any(Instant.class));
+        verify(orderService).cancelIfUnpaid(eq(2L), any(Instant.class));
     }
 
-    private static Order order(Long id) {
-        Order o = new Order(1L, "k" + id);
-        ReflectionTestUtils.setField(o, "id", id);
-        return o;
+    @Test
+    void cutoffIsTheTimeoutAgo() {
+        when(repository.findIdsByStatusInAndCreatedAtBefore(any(), any())).thenReturn(List.of(1L));
+
+        job.cancelUnpaidOrders();
+
+        verify(orderService).cancelIfUnpaid(eq(1L), argThat(cutoff ->
+                cutoff.isBefore(Instant.now().minus(Duration.ofMinutes(14)))
+                        && cutoff.isAfter(Instant.now().minus(Duration.ofMinutes(16)))));
     }
 }
